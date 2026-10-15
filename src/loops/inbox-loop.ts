@@ -62,14 +62,14 @@ export async function ensureDefaultInboxLoops(store: LoopStore, owner: string): 
 }
 
 /** Heading that starts the owner's own rules in an inbox Loop's playbook. */
-export const INBOX_OWNER_RULES_HEADING = "## My rules";
+const INBOX_OWNER_RULES_HEADING = "## My rules";
 
 /**
  * The owner's own rules from an inbox Loop's playbook, if any. The rest of an inbox
  * playbook is a snapshot of the built-in sync task, which each fire renders fresh,
  * so only this section carries the owner's edits into the sync stage.
  */
-export function inboxOwnerRules(playbook: string): string {
+function inboxOwnerRules(playbook: string): string {
   const at = playbook.indexOf(INBOX_OWNER_RULES_HEADING);
   return at < 0 ? "" : playbook.slice(at + INBOX_OWNER_RULES_HEADING.length).trim();
 }

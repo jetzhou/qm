@@ -28,7 +28,7 @@ function setup(opts: { secret?: string; appToken?: string } = {}) {
     },
     fetchImpl: async (input, init) => {
       const method = String(input).split("/").at(-1);
-      const token = String((init?.headers as Record<string, string>).authorization).slice(7);
+      const token = String(((init?.headers ?? {}) as Record<string, string>).authorization).slice(7);
       if (method === "auth.test") {
         authTests++;
         return Response.json({ ok: true, team_id: "T1", user_id: people[token] });
