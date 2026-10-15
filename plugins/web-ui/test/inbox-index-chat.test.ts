@@ -64,7 +64,7 @@ test("inbox sidebar restores its conversation and releases it on native navigati
     )!;
     suggestion.click();
     assert.equal(sidebar.querySelector<HTMLTextAreaElement>("textarea")!.value, "Summarize my inbox");
-    assert.ok(suggestion.closest(".chat-bottom-dock"));
+    assert.ok(suggestion.closest(".message-stack"));
     render(inboxChat({ kind: "inbox", hasEmail: true, hasSlack: false, hasDrafts: false }), host);
     await until(() => sidebar.textContent!.includes("Summarize my recent emails"));
     assert.equal(
@@ -76,10 +76,13 @@ test("inbox sidebar restores its conversation and releases it on native navigati
     const text = "Summarize this inbox\nKeep it brief.";
     conversation.state.agent.state.messages = [{ role: "user", content: text, timestamp: 100 }];
     conversation.redraw();
-    assert.equal(sidebar.querySelector(".inbox-chat-msg.human .inbox-chat-text")?.textContent, text);
-    assert.equal(sidebar.querySelector(".user-row, .pin-toggle"), null);
+    assert.equal(
+      sidebar.querySelector<HTMLElement & { content: string }>(".user-row .user-bubble qm-markdown")?.content,
+      text,
+    );
+    assert.ok(sidebar.querySelector(".custom-chat-shell.in-pane"), "the inbox assistant is the main chat in pane mode");
     assert.ok(sidebar.querySelector('[aria-label="Copy message"]'));
-    assert.ok(sidebar.querySelector(".inbox-chat-composer .composer-wrap"));
+    assert.ok(sidebar.querySelector(".chat-bottom-dock .composer-wrap"));
     const count = allConversations().length;
     host.replaceChildren();
     assert.equal(allConversations().length, count - 1);
@@ -137,15 +140,17 @@ test("shared sidebar prompts follow thread state and whole inbox context", async
         }),
         host,
       );
-      assert.equal(host.querySelector(".inbox-chat-text")!.textContent, "Keep it short.\nTwo lines.");
-      host.querySelector<HTMLButtonElement>(".inbox-chat-suggestion")!.click();
+      assert.equal(
+        host.querySelector<HTMLElement & { content: string }>(".user-row .user-bubble qm-markdown")!.content,
+        "Keep it short.\nTwo lines.",
+      );
+      host.querySelector<HTMLButtonElement>(".suggested-activity")!.click();
       assert.deepEqual(clicked, [assistantPrompts(context)[0]]);
       classes.push([...new Set([...host.querySelectorAll("[class]")].map((element) => element.className))].join("|"));
     }
     assert.equal(classes[0], classes[1]);
-    render(assistantMessage({ role: "human", text: "", before: html`<a>Attachment</a>` }), host);
-    assert.equal(host.querySelector<HTMLElement>(".inbox-chat-text")!.hidden, true);
-    assert.equal(host.querySelector("a")!.textContent, "Attachment");
+    render(assistantMessage({ role: "human", text: "" }), host);
+    assert.equal(host.querySelector<HTMLElement>(".user-bubble")!.hidden, true);
   } finally {
     await close();
   }

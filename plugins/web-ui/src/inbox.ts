@@ -27,6 +27,7 @@ import {
   MoreHorizontal,
   Plus,
   RefreshCw,
+  Send,
   Undo2,
   X,
 } from "lucide";
@@ -1305,12 +1306,17 @@ export function contextTpl(item: InboxItem): TemplateResult | typeof nothing {
   </div>`;
 }
 
+function submitToItemComposer(from: Element, instruction: string): void {
+  for (let el = from.parentElement; el; el = el.parentElement) {
+    const composer = el.querySelector(".inbox-chat .embedded-composer");
+    if (!composer) continue;
+    composer.dispatchEvent(new CustomEvent("composer-submit", { detail: instruction }));
+    return;
+  }
+}
+
 export function chatTpl(item: InboxItem, compact = false): TemplateResult {
   const busy = chatting.has(item.id);
-  const submit = (event: MouseEvent, instruction: string): void => {
-    const composer = (event.currentTarget as HTMLElement).closest(".inbox-chat")?.querySelector(".embedded-composer");
-    composer?.dispatchEvent(new CustomEvent("composer-submit", { detail: instruction }));
-  };
   return assistantSidebar({
     context: {
       kind: "thread",
@@ -1319,15 +1325,18 @@ export function chatTpl(item: InboxItem, compact = false): TemplateResult {
       sent: Boolean(item.sentChat),
       resolved: Boolean(item.probablyResolved),
     },
-    messages: html`${item.thread.map((message) => assistantMessage({ role: message.role, text: message.text }))}`,
+    messages: html`${item.thread.map((message) => assistantMessage({ role: message.role, text: message.text, at: message.at }))}`,
     busy,
-    status: busy ? html`<div class="inbox-chat-working">${workingWave()}<span>Thinking…</span></div>` : nothing,
+    status: busy
+      ? html`<section class="live-work-status" aria-live="polite">
+          <div class="live-work-line static"><span class="live-work-label">${sheenLabel("Thinking", true)}</span></div>
+        </section>`
+      : nothing,
     showPrompts: item.status === "open" && item.thread.length === 0,
-    send:
-      item.status === "open" && !usesOutputReview(item) && (!item.sentChat || item.draft)
-        ? { disabled: busy || acting.has(item.id), run: (event) => submit(event, "Send it") }
-        : undefined,
-    onPrompt: (prompt, event) => submit(event, prompt),
+    cta: compact ? undefined : `Ask ${brandName()} about this thread`,
+    onPrompt: (prompt, origin) => {
+      if (origin) submitToItemComposer(origin, prompt);
+    },
     composer: embeddedComposer(
       `inbox:${appState.me?.user ?? "anon"}:${item.loopId}:${item.id}`,
       {
@@ -1435,6 +1444,17 @@ export function draftMessageTpl(item: InboxItem): TemplateResult | typeof nothin
           @input=${(e: Event) => editDraft(item, { body: (e.currentTarget as HTMLTextAreaElement).value })}
           @blur=${() => void persistDraft(item)}
         ></textarea>
+      </div>
+      <div class="inbox-draft-actions">
+        <button
+          class="btn primary inbox-draft-send"
+          type="button"
+          ?disabled=${busy || acting.has(item.id)}
+          ${tip("Send the draft, with anything typed in the assistant box as instructions")}
+          @click=${(e: MouseEvent) => submitToItemComposer(e.currentTarget as HTMLElement, "Send it")}
+        >
+          ${icon(Send, 14)}<span>Send it</span>
+        </button>
       </div>
       ${
         !gmail && item.reactions?.length
@@ -1769,6 +1789,7 @@ function syncLineTpl(surface: InboxSurface): TemplateResult | typeof nothing {
   const status =
     crons.length === 1 ? syncStatusLabel(crons[0]!) : `${crons.filter((cron) => cron.enabled).length} syncs on`;
   return html`<span class="inbox-sync-line">
+    <span class="inbox-sync-status" role=${moving ? "status" : nothing}>${moving ? MIGRATION_STATUS : status}</span>
     ${syncActionTpl({
       label: "Sync",
       busyLabel: "Syncing…",
@@ -1777,7 +1798,6 @@ function syncLineTpl(surface: InboxSurface): TemplateResult | typeof nothing {
       tooltip: moving ? MIGRATION_HINT : "Sync now",
       action: () => void syncNow(surface.viewId),
     })}
-    <span class="inbox-sync-status" role=${moving ? "status" : nothing}>${moving ? MIGRATION_STATUS : status}</span>
   </span>`;
 }
 

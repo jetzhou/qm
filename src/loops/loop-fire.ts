@@ -1,5 +1,5 @@
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
-import { renderSourceInboxTask, renderInboxSyncTask } from "./inbox-loop.ts";
+import { renderSourceInboxTask, renderInboxSyncTask, withInboxOwnerRules } from "./inbox-loop.ts";
 import { cronTriggerAuthority } from "../cron/authority.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import { boundLoopCron } from "./authority.ts";
@@ -394,6 +394,26 @@ function triagePrompt(loop: Loop, open: LoopItem[], pending: LoopItem[]): string
   ].join("\n");
 }
 
+function isReplyLoop(loop: Loop, item: LoopItem): boolean {
+  return Boolean(adapterForItem(item)) && loop.shipActions.length === 1 && loop.shipActions[0]?.action === "send";
+}
+
+// Reply Loops are kept consistent with Gmail and Slack by events. Each event lands
+// here, so this stage alone decides whether the person still owes a reply.
+const REPLY_DECISION = [
+  'First decide whether the person still owes a reply in this conversation. sourcePayload.latestEvent, when present, is the newest message an event saw: author "owner" means the person wrote it themselves (in Gmail, Slack, or from QM).',
+  'If the person has already answered and nothing newer asks anything of them, end with {"resolution":{"kind":"replied","reason":"<one line>"}}. If the conversation needs nothing from them (closed out, a plain thanks, someone else answered, machine noise), end with {"resolution":{"kind":"no_reply_needed","reason":"<one line>"}}. Re-read the conversation from the source when the payload is not enough to tell. When in doubt, draft a reply.',
+].join("\n");
+
+function parseResolution(parsed: unknown): { kind: "replied" | "no_reply_needed"; reason: string } | null {
+  if (!parsed || typeof parsed !== "object" || !("resolution" in parsed)) return null;
+  const raw = (parsed as { resolution?: unknown }).resolution;
+  if (!raw || typeof raw !== "object") return null;
+  const { kind, reason } = raw as { kind?: unknown; reason?: unknown };
+  if (kind !== "replied" && kind !== "no_reply_needed") return null;
+  return { kind, reason: typeof reason === "string" ? reason.slice(0, 500) : "" };
+}
+
 function workPrompt(loop: Loop, item: LoopItem, guidance?: string, similar: LoopItem[] = []): string {
   const data = JSON.stringify({
     sourceKey: promptText(item.sourceKey),
@@ -428,8 +448,11 @@ function workPrompt(loop: Loop, item: LoopItem, guidance?: string, similar: Loop
     "```",
     shipActionContract(loop),
     `The item's success condition: ${promptText(loop.successCondition)}`,
-    adapterForItem(item) && loop.shipActions.length === 1 && loop.shipActions[0]?.action === "send"
-      ? 'For a reply, end with a fenced JSON object {"proposal":{"body":"the draft reply","to":["email recipients if applicable"],"subject":"email subject if applicable"},"outputs":[]}. Save the draft for human review; never send it. If no reply is needed, return {"outputs":[]}.'
+    isReplyLoop(loop, item)
+      ? [
+          REPLY_DECISION,
+          'For a reply, end with a fenced JSON object {"proposal":{"body":"the draft reply","to":["email recipients if applicable"],"subject":"email subject if applicable"},"outputs":[]}. Save the draft for human review; never send it.',
+        ].join("\n")
       : 'End your reply with a fenced json block: {"outputs": [{"shipAction": "<declared action>", "label": "<optional grouping label>", "title": "<one line>", "externalRef": "<url or id if any>", "summary": "<one line>"}]}. List every externally-reviewable artifact you prepared; an empty outputs array means the item needed none.',
     "[End loop work]",
     "",
@@ -674,7 +697,14 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
           loop,
           `${fireKey}:sync`,
           threadRef,
-          loop.surface === "inbox" ? renderInboxSyncTask(loop.id) : renderSourceInboxTask(loop.id, loop.sources![0]!),
+          promptText(
+            withInboxOwnerRules(
+              loop.surface === "inbox"
+                ? renderInboxSyncTask(loop.id)
+                : renderSourceInboxTask(loop.id, loop.sources![0]!),
+              loop.playbook,
+            ),
+          ),
         );
         if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
         failure = stageFailure("inbox sync", outcome)?.error.message;
@@ -721,6 +751,16 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
             const failure = stageFailure("work", outcome);
             if (failure) throw failure.error;
             const parsed = fencedJson(outcome.reply ?? "");
+            const resolution = isReplyLoop(loop, item) ? parseResolution(parsed) : null;
+            if (resolution) {
+              // Releases the claim, so the runner skips capture and judging for this item.
+              await deps.items.recordAction(item.id, {
+                kind: resolution.kind === "replied" ? "replied" : "dismissed",
+                outcome: "dismissed",
+                ...(resolution.reason ? { result: resolution.reason } : {}),
+              });
+              return { runId: outcome.sessionId ?? `${threadRef}:work:${item.id}` };
+            }
             const proposal =
               parsed && typeof parsed === "object" && "proposal" in parsed
                 ? adapterForItem(item)?.parseProposal(parsed.proposal)

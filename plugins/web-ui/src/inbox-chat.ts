@@ -6,7 +6,6 @@ import { createConversation, disposeConversation, ensureDeliveryStream } from ".
 import { openSessionInto } from "./sessions";
 import { appState, can } from "./shell-state";
 import type { AssistantSidebarContext } from "./assistant-sidebar";
-import { brandName } from "./ui";
 
 class InboxChat extends LitElement {
   static properties = { context: { attribute: false } };
@@ -47,7 +46,7 @@ class InboxChat extends LitElement {
         ensureDeliveryStream,
         inbox: { context: () => this.context },
       },
-      { placeholder: `Ask ${brandName()} about your inbox`, runtimeAccount: "company" },
+      { placeholder: "Ask anything", runtimeAccount: "company" },
     );
     this.conversation = conversation;
     const current = conversation.mountLoadingPane();

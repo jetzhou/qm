@@ -56,3 +56,29 @@ Keep background work enabled: ingestion maintenance runs alongside the scheduler
 The Loop's Ingestion panel shows the last receipt and processing error. A 202 acknowledgment followed by an error means the event is still durable and will retry or remains represented by a queued/parked ledger item. A failed Loop may require operator attention under its existing governor and retry limits. Watch renewal errors retry after five minutes.
 
 Do not paste webhook signing secrets into chat, playbooks, or committed configuration. The secret is returned only on creation for generic webhooks and is omitted from later listing responses.
+
+## Conversation events (inbox)
+
+Every new message in a conversation already on an inbox ledger is an event, and
+every event is judged by the Loop's LLM work stage. Nothing resolves an item in code.
+
+- **Sources.** QM's Slack bot (`inboxSlackMessage`), the Slack connector app's
+  user-token Events API (`POST /v1/slack/user-events`), Gmail history (INBOX and
+  SENT), the inbox open-time source check, and the scheduled sync agent
+  (`POST /v1/loops/:id/events`) all produce events.
+- **Queue.** Events land in a per-Loop internal `conversation` ingress source
+  (created on first use, durable, deduplicated by event key). Entries are marked
+  `merge`: they layer `sourcePayload.latestEvent` onto the existing item and refresh
+  `sourceAt`, which reopens a resolved item. A merge for an unknown conversation is
+  dropped; events never create items.
+- **Decision.** The work stage sees `latestEvent` (`author: "owner" | "other"`). It
+  returns a draft, or `{"resolution":{"kind":"replied"|"no_reply_needed"}}`, which
+  dismisses the item with the reason.
+- **Slack connector app.** Subscribe the app to the user events `message.im`,
+  `message.mpim`, `message.channels` and `message.groups`, with the Request URL
+  `<PUBLIC_API_URL>/v1/slack/user-events`. Set `SLACK_OAUTH_SIGNING_SECRET` (and
+  optionally `SLACK_OAUTH_APP_TOKEN` with `authorizations:read`, so one event reaches
+  every connected person in the conversation). Events map to people by `auth.test`
+  on their connector token.
+- **Gmail without Pub/Sub.** When `GMAIL_PUBSUB_*` is unset, Gmail ingestion sources
+  poll their history cursor every minute instead of registering a watch.

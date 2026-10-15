@@ -92,7 +92,7 @@ test("a submission freezes the edited draft before upload and never retries a co
       );
       const saving = inbox.persistDraft(item);
       await until(() => Boolean(releaseEdit));
-      host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!.click();
+      host.querySelector<HTMLButtonElement>(".inbox-draft-send")!.click();
       await until(() => Boolean(releaseUpload));
       assert.equal(
         window.dispatchEvent(new CustomEvent("qm:prepare-update", { cancelable: true, detail: { ready: false } })),

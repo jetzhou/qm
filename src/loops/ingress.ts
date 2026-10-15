@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { Loop } from "../types.ts";
+import type { Loop, LoopItem } from "../types.ts";
 import type { LoopStore } from "./loop-store.ts";
 import type { IngestEntryInput, LoopItemLedger } from "./item-ledger.ts";
 import type { LoopOutputStore } from "./output-store.ts";
@@ -17,7 +17,7 @@ export interface LoopIngress {
   id: string;
   loopId: string;
   owner: string;
-  kind: "webhook" | "slack" | "gmail";
+  kind: "webhook" | "slack" | "gmail" | "conversation";
   enabled: boolean;
   secret?: string;
   teamId?: string;
@@ -31,12 +31,41 @@ export interface LoopIngress {
   nextWorkAt?: number;
 }
 
+/**
+ * An entry bound for the ledger. `merge` entries describe a new message in a
+ * conversation that is already on the ledger (the owner's own reply, or a
+ * follow-up): they layer onto the existing item instead of replacing it, and are
+ * dropped when no such item exists, so an event never invents a conversation.
+ */
+export type IngressEntry = IngestEntryInput & { merge?: boolean };
+
+/** The newest message an event saw; the work stage decides what it means. */
+export interface LatestEvent {
+  author: "owner" | "other";
+  at: number;
+  text?: string;
+  from?: string;
+}
+
+/** The ledger entry for an ingress entry, or null when a merge has nothing to merge into. */
+export function ledgerEntry(raw: IngressEntry, existing: LoopItem | undefined): IngestEntryInput | null {
+  const { merge, ...base } = raw;
+  if (!merge) return base;
+  if (!existing) return null;
+  return {
+    ...base,
+    ...(base.source === undefined && existing.source !== undefined ? { source: existing.source } : {}),
+    ...(base.summary === undefined && existing.sourceSummary !== undefined ? { summary: existing.sourceSummary } : {}),
+    sourcePayload: { ...existing.sourcePayload, ...base.sourcePayload },
+  };
+}
+
 export interface IngressDelivery {
   id: string;
   ingressId: string;
   queueKey?: string;
   receivedAt: number;
-  entries?: IngestEntryInput[];
+  entries?: IngressEntry[];
   historyId?: string;
   ingested?: boolean;
   completedAt?: number;
@@ -54,7 +83,10 @@ export interface LoopIngressDeps {
   fire: Pick<LoopFireService, "fire">;
   lock: AdvisoryLock;
   gmailConfig?: GmailPushConfig;
+  /** Present with or without Pub/Sub; without it Gmail sources poll their history cursor. */
   gmailClient?: ReturnType<typeof createGmailPushClient>;
+  /** Poll interval for Gmail sources when Pub/Sub is not configured. */
+  gmailPollMs?: number;
   verifyGoogle?: typeof verifyGmailPush;
 }
 
@@ -71,7 +103,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
     source: LoopIngress,
     deliveryId: string,
     payload: Pick<IngressDelivery, "entries" | "historyId">,
-  ) {
+  ): Promise<void> {
     const id = hashId([source.id, deliveryId]);
     await deps.deliveries.putIfAbsent(id, {
       id,
@@ -97,9 +129,11 @@ export function createLoopIngress(deps: LoopIngressDeps) {
         .filter((delivery) => !delivery.completedAt && delivery.nextAttemptAt <= Date.now())
         .sort((a, b) => a.receivedAt - b.receivedAt)
         .slice(0, 20);
-      const ingest = async (entries: IngestEntryInput[]) => {
-        for (const entry of entries) {
-          const existing = (await deps.items.byLoop(source.loopId)).find((item) => item.sourceKey === entry.dedupeKey);
+      const ingest = async (entries: IngressEntry[]) => {
+        for (const raw of entries) {
+          const existing = (await deps.items.byLoop(source.loopId)).find((item) => item.sourceKey === raw.dedupeKey);
+          const entry = ledgerEntry(raw, existing);
+          if (!entry) continue;
           const refreshed = existing && (entry.sourceAt ?? 0) > (existing.sourceAt ?? 0);
           if (
             refreshed &&
@@ -180,8 +214,55 @@ export function createLoopIngress(deps: LoopIngressDeps) {
     });
   }
 
+  /** The internal queue for conversation events on one Loop, created on first use. */
+  async function conversationSource(loop: Pick<Loop, "id" | "owner">): Promise<LoopIngress> {
+    const find = async () =>
+      (await deps.sources.select({ where: { field: "loopId", anyOfFold: [loop.id] } })).find(
+        (source) => source.kind === "conversation",
+      );
+    const found = await find();
+    if (found) return found;
+    return deps.lock.withLock(`loop-ingress-setup:${loop.id}`, async () => {
+      const again = await find();
+      if (again) return again;
+      const source: LoopIngress = {
+        id: randomUUID(),
+        loopId: loop.id,
+        owner: loop.owner,
+        kind: "conversation",
+        enabled: true,
+        createdAt: Date.now(),
+      };
+      await deps.sources.put(source.id, source);
+      return source;
+    });
+  }
+
+  function gmailMode(): "push" | "poll" | undefined {
+    if (!deps.gmailClient) return undefined;
+    return deps.gmailConfig ? "push" : "poll";
+  }
+
   return {
-    gmailAvailable: Boolean(deps.gmailConfig && deps.gmailClient),
+    gmailAvailable: Boolean(deps.gmailClient),
+    gmailMode: gmailMode(),
+    /**
+     * Queue conversation events (Slack messages QM saw, Gmail sent mail, source
+     * refreshes) for a Loop. Every event goes through the Loop's own work stage,
+     * which decides whether the item still needs a reply; nothing here resolves it.
+     */
+    async enqueueConversation(
+      loop: Pick<Loop, "id" | "owner">,
+      eventKey: string,
+      entries: IngressEntry[],
+    ): Promise<boolean> {
+      if (!entries.length || !(await deps.enabledFor(loop.owner))) return false;
+      const source = await conversationSource(loop);
+      if (!source.enabled) return false;
+      await enqueue(source, eventKey, { entries });
+      void process(source.id).catch((error) => swallow("Loop conversation event", error));
+      return true;
+    },
     async list(loopId: string) {
       return await deps.sources.select({ omit: ["secret"], where: { field: "loopId", anyOfFold: [loopId] } });
     },
@@ -216,7 +297,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
           createdAt: Date.now(),
         };
         if (input.kind === "gmail") {
-          if (!deps.gmailClient) throw new Error("An administrator must configure Gmail Pub/Sub first");
+          if (!deps.gmailClient) throw new Error("Gmail ingestion is not available on this instance");
           source.gmail = await deps.gmailClient.watch(loop.owner);
           source.nextWatchAt = Date.now() + 86_400_000;
         } else {
@@ -286,7 +367,12 @@ export function createLoopIngress(deps: LoopIngressDeps) {
         return { status: 202, body: "Accepted" };
       }
       const source = await deps.sources.get(id);
-      if (!source?.enabled || !(await deps.enabledFor(source.owner)) || source.kind === "gmail")
+      if (
+        !source?.enabled ||
+        !(await deps.enabledFor(source.owner)) ||
+        source.kind === "gmail" ||
+        source.kind === "conversation"
+      )
         return { status: 404, body: "Not found" };
       const verifier = getVerifier(source.kind === "slack" ? "slack" : "hmac-sha256")!;
       const input = { ...request, secret: source.secret };
@@ -378,8 +464,10 @@ export function createLoopIngress(deps: LoopIngressDeps) {
           });
         }
         if (source.kind === "gmail" && (source.nextReconcileAt ?? 0) <= Date.now()) {
-          await enqueue(source, `reconcile:${Math.floor(Date.now() / 600_000)}`, {});
-          await deps.sources.merge(source.id, { nextReconcileAt: Date.now() + 600_000 });
+          // Pub/Sub pushes changes and this only reconciles; without it, this is the poll.
+          const every = deps.gmailConfig ? 600_000 : Math.max(15_000, deps.gmailPollMs ?? 60_000);
+          await enqueue(source, `reconcile:${Math.floor(Date.now() / every)}`, {});
+          await deps.sources.merge(source.id, { nextReconcileAt: Date.now() + every });
         }
       }
       for (const source of sources) {

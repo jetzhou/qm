@@ -1,29 +1,38 @@
 import type { LoopItem } from "../types.ts";
 import type { LoopStore } from "./loop-store.ts";
 import type { LoopItemLedger } from "./item-ledger.ts";
+import type { IngressEntry, LatestEvent } from "./ingress.ts";
 import type { ConversationEvent } from "./sources/adapter.ts";
 import { sourceAdapter } from "./sources/index.ts";
+import { hashId } from "../util/crypto.ts";
 import { swallow } from "../util/errors.ts";
 
 export interface InboxRealtimeDeps {
   loops: Pick<LoopStore, "list">;
-  items: Pick<LoopItemLedger, "byLoop" | "recordAction" | "ingest">;
-  requestFire?: (loopId: string) => void;
+  items: Pick<LoopItemLedger, "byLoop">;
+  /** The Loop's event queue. Every event is judged by the Loop's work stage. */
+  enqueue: (loop: { id: string; owner: string }, eventKey: string, entries: IngressEntry[]) => Promise<unknown>;
+  /** The inbox_loops flag: events never touch a Loop whose owner has it off. */
+  enabledFor?: (owner: string) => Promise<boolean>;
 }
 
-const OPEN_STATUSES = new Set(["queued", "in_progress", "ready", "failed"]);
 const LOOP_CACHE_TTL_MS = 60_000;
-const FIRE_DEBOUNCE_MS = 30_000;
-const MAX_REPLY_CHARS = 500;
+const MAX_TEXT_CHARS = 2_000;
 const MAX_SUMMARY_CHARS = 200;
 const MAX_SNIPPET_CHARS = 10_000;
 
+/**
+ * Turn a message QM saw in a conversation already on an inbox ledger into a Loop
+ * event. Both the owner's own replies and other people's follow-ups are queued,
+ * whatever the item's status, so a dismissed card can come back and an open card
+ * can settle. The decision belongs to the Loop's LLM work stage, not to this hook.
+ */
 export function createInboxRealtime(deps: InboxRealtimeDeps): {
-  onConversationEvent(event: ConversationEvent): Promise<void>;
+  /** `owners` limits the event to those people's Loops (events seen through one person's Slack). */
+  onConversationEvent(event: ConversationEvent, opts?: { owners?: string[] }): Promise<void>;
 } {
   let cachedInboxLoops: Array<{ id: string; owner: string }> = [];
   let cacheAt = 0;
-  const lastFireAt = new Map<string, number>();
 
   async function inboxLoops(): Promise<Array<{ id: string; owner: string }>> {
     const now = Date.now();
@@ -38,17 +47,18 @@ export function createInboxRealtime(deps: InboxRealtimeDeps): {
   }
 
   return {
-    async onConversationEvent(event) {
+    async onConversationEvent(event, opts) {
       if (!Number.isFinite(event.at)) return;
       const adapter = sourceAdapter(event.source);
       if (!adapter) return;
+      const owners = opts?.owners?.map((owner) => owner.toLowerCase());
       for (const loop of await inboxLoops()) {
+        if (owners && !owners.includes(loop.owner.toLowerCase())) continue;
+        if (deps.enabledFor && !(await deps.enabledFor(loop.owner).catch(() => false))) continue;
         let matched: LoopItem[];
         try {
-          const items = await deps.items.byLoop(loop.id);
-          matched = items.filter(
+          matched = (await deps.items.byLoop(loop.id)).filter(
             (item) =>
-              OPEN_STATUSES.has(item.status) &&
               (item.source ?? item.sourcePayload?.source) === event.source &&
               adapter.matchesEvent(item, event.conversationRef),
           );
@@ -57,44 +67,30 @@ export function createInboxRealtime(deps: InboxRealtimeDeps): {
           continue;
         }
         if (!matched.length) continue;
-        const ownerReplied = Boolean(event.senderEmail && event.senderEmail.toLowerCase() === loop.owner.toLowerCase());
-        for (const item of matched) {
-          try {
-            if (ownerReplied) {
-              await deps.items.recordAction(item.id, {
-                kind: "replied",
-                sourceAt: event.at,
-                outcome: "dismissed",
-                ...(event.text ? { result: event.text.slice(0, MAX_REPLY_CHARS) } : {}),
-              });
-            } else if (event.at > (item.sourceAt ?? 0)) {
-              const text = event.text?.trim();
-              const snippet = text?.slice(0, MAX_SNIPPET_CHARS);
-              await deps.items.ingest([
-                {
-                  loopId: loop.id,
-                  dedupeKey: item.sourceKey,
-                  ...(item.source !== undefined ? { source: item.source } : {}),
-                  ...(text ? { summary: text.slice(0, MAX_SUMMARY_CHARS) } : {}),
-                  sourceAt: event.at,
-                  sourcePayload: {
-                    ...item.sourcePayload,
-                    ...(snippet ? { snippet } : {}),
-                    receivedAt: event.at,
-                  },
-                },
-              ]);
-            }
-          } catch (e) {
-            swallow("inbox realtime: update item", e);
-          }
-        }
-        if (!ownerReplied && deps.requestFire) {
-          const last = lastFireAt.get(loop.id) ?? 0;
-          if (Date.now() - last > FIRE_DEBOUNCE_MS) {
-            lastFireAt.set(loop.id, Date.now());
-            deps.requestFire(loop.id);
-          }
+        const owner = Boolean(event.senderEmail && event.senderEmail.toLowerCase() === loop.owner.toLowerCase());
+        const text = event.text?.trim();
+        const latestEvent: LatestEvent = {
+          author: owner ? "owner" : "other",
+          at: event.at,
+          ...(text ? { text: text.slice(0, MAX_TEXT_CHARS) } : {}),
+          ...(!owner && event.senderEmail ? { from: event.senderEmail } : {}),
+        };
+        const entries: IngressEntry[] = matched.map((item) => ({
+          loopId: loop.id,
+          dedupeKey: item.sourceKey,
+          ...(item.source !== undefined ? { source: item.source } : {}),
+          ...(!owner && text ? { summary: text.slice(0, MAX_SUMMARY_CHARS) } : {}),
+          sourceAt: event.at,
+          merge: true,
+          sourcePayload: {
+            latestEvent,
+            ...(!owner ? { receivedAt: event.at, ...(text ? { snippet: text.slice(0, MAX_SNIPPET_CHARS) } : {}) } : {}),
+          },
+        }));
+        try {
+          await deps.enqueue(loop, hashId([event.source, event.conversationRef, String(event.at)]), entries);
+        } catch (e) {
+          swallow("inbox realtime: enqueue event", e);
         }
       }
     },

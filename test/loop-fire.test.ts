@@ -850,6 +850,24 @@ test("inbox sync exceptions count once and recover on a successful retry", async
   assert.equal(s.turns.length, 2);
 });
 
+test("inbox sync carries the owner's own playbook rules into the scan", async () => {
+  const s = service(() => "Synced");
+  const loop = await makeLoop(s.loops, {
+    surface: "inbox:gmail",
+    sources: ["gmail"],
+    playbook: "Built-in snapshot.\n\n## My rules\n- Only track email where I am on the To line.",
+  });
+  assert.equal((await s.fire.fire(loop.id, "rules")).status, "silent");
+  const sync = s.turns[0]!.text!;
+  assert.match(sync, /Source restriction: scan only gmail/);
+  assert.match(sync, /owner's own rules for this Loop[\s\S]*Only track email where I am on the To line/);
+  assert.doesNotMatch(sync, /Built-in snapshot/);
+
+  const plain = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"], playbook: "Built-in snapshot." });
+  await s.fire.fire(plain.id, "plain");
+  assert.doesNotMatch(s.turns[1]!.text!, /owner's own rules/);
+});
+
 test("event-only Email work skips scanning and holds its draft instead of marking it shipped", async () => {
   const w = service((req) => {
     if (stage(req) === "intake") throw new Error("Event work must not enumerate");
@@ -1126,4 +1144,60 @@ test("Slack work and follow-up prompts preserve message images without repeating
     assert.match(req.text ?? "", /Alex/);
   }
   assert.match(JSON.stringify((await s.items.get(item!.id))!.sourcePayload), /avatar.png/);
+});
+
+test("a reply Loop's work stage can settle an event as replied or no reply needed", async () => {
+  for (const [kind, actionKind] of [
+    ["replied", "replied"],
+    ["no_reply_needed", "dismissed"],
+  ] as const) {
+    let judged = false;
+    const w = service((req) => {
+      if (stage(req) === "intake") throw new Error("Event work must not enumerate");
+      if (stage(req) === "work") {
+        assert.match(req.text ?? "", /still owes a reply/);
+        assert.match(req.text ?? "", /"latestEvent":\{"author":"owner"/);
+        return `Done.\n\`\`\`json\n{"resolution":{"kind":"${kind}","reason":"Josh answered in Gmail"}}\n\`\`\``;
+      }
+      judged = true;
+      return '```json\n{"outcome":"met","reason":"ok"}\n```';
+    });
+    const loop = await makeLoop(w.loops, { sources: ["gmail"], shipActions: [{ action: "send", gate: "hold" }] });
+    await w.items.ingest([
+      {
+        loopId: loop.id,
+        dedupeKey: "thread1",
+        source: "gmail",
+        sourceAt: 2000,
+        sourcePayload: {
+          source: "gmail",
+          snippet: "Can you send the deck?",
+          gmail: { threadId: "thread1" },
+          latestEvent: { author: "owner", at: 2000, text: "Sent it over" },
+        },
+      },
+    ]);
+    const result = await w.fire.fire(loop.id, `push:${kind}`, undefined, { enumerate: false });
+    const [item] = await w.items.byLoop(loop.id);
+    assert.equal(item?.status, "skipped");
+    assert.equal(item?.actionKind, actionKind);
+    assert.equal(item?.actionResult, "Josh answered in Gmail");
+    assert.equal(item?.proposal, undefined);
+    assert.equal(judged, false);
+    assert.deepEqual(result.summary?.ready, []);
+    assert.deepEqual(result.summary?.shipped, []);
+  }
+});
+
+test("a resolution from a non-reply Loop is ignored", async () => {
+  const w = service((req) =>
+    stage(req) === "work"
+      ? '```json\n{"resolution":{"kind":"replied","reason":"x"},"outputs":[]}\n```'
+      : '```json\n{"outcome":"met","reason":"ok"}\n```',
+  );
+  const loop = await makeLoop(w.loops);
+  await w.items.ingest([{ loopId: loop.id, dedupeKey: "k", sourceAt: 1, sourcePayload: {} }]);
+  await w.fire.fire(loop.id, "push:generic", undefined, { enumerate: false });
+  const [item] = await w.items.byLoop(loop.id);
+  assert.notEqual(item?.status, "skipped");
 });

@@ -859,9 +859,11 @@ test("inbox list refreshes open Gmail items before returning counts, but not ano
   const refreshes: string[] = [];
   // Exercise the route with the real refresher via the same dependency used by wiring.
   const { createInboxSourceRefresh } = await import("../src/loops/inbox-source-refresh.ts");
+  const { simulatedLoopEvents } = await import("./support/inbox-events.ts");
   w.sourceRefresh = createInboxSourceRefresh({
     featureFlags: { enabled: async () => true },
     items: w.loops.items,
+    enqueue: simulatedLoopEvents(w.loops.items).enqueue,
     tokens: { connectorAccessToken: async () => "synthetic" },
     directory: { getBySlackId: async () => null },
     fetchImpl: async (url) => {
@@ -1188,6 +1190,7 @@ test("an owner cannot trigger Slack avatar enrichment through item detail when I
   };
   w.sourceRefresh = createInboxSourceRefresh({
     items: w.loops.items,
+    enqueue: async () => undefined,
     featureFlags: { enabled },
     tokens: { connectorAccessToken: async () => assert.fail("disabled Inbox must not read credentials") },
     directory: { getBySlackId: async () => assert.fail("disabled Inbox must not read the directory") },

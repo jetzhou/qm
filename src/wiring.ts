@@ -33,6 +33,7 @@ import { createSessionMailbox, type SessionMessage } from "./sessions/session-ma
 import type { TaskAckState } from "./slack/task-ack.ts";
 import { createLoopIngress, type LoopIngressService, type LoopIngress, type IngressDelivery } from "./loops/ingress.ts";
 import { createGmailPushClient } from "./loops/gmail-push.ts";
+import { createSlackUserEvents, type SlackUserEvents } from "./loops/slack-user-events.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
 import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from "./memory/tidy.ts";
@@ -533,6 +534,7 @@ export interface BuiltApp {
   loops: LoopServiceDeps;
   webhookReceiver: WebhookReceiver;
   loopIngress: LoopIngressService;
+  slackUserEvents: SlackUserEvents;
   admin: AdminService;
   rateLimiter: RateLimiter;
   errors: ErrorLog;
@@ -2356,7 +2358,8 @@ export function buildApp(
   const inboxRealtime = createInboxRealtime({
     loops: loopStore,
     items: loopItems,
-    requestFire: (loopId) => void loopFire.fire(loopId, `loop:${loopId}:slack-event:${Date.now()}`).catch(() => {}),
+    enqueue: (loop, eventKey, entries) => loopIngress.enqueueConversation(loop, eventKey, entries),
+    enabledFor: (owner) => featureFlags.enabled("inbox_loops", scopeId("personal", owner)),
   });
   const keychainApprovals = keychain
     ? createKeychainApprovals({
@@ -2594,9 +2597,17 @@ export function buildApp(
     outputs: loopOutputs,
     fire: loopFire,
     lock: advisoryLock,
-    ...(config.gmailPubSub && keychain
-      ? { gmailConfig: config.gmailPubSub, gmailClient: createGmailPushClient(keychain, config.gmailPubSub) }
-      : {}),
+    // Without Pub/Sub the Gmail client polls the same history cursor.
+    ...(keychain ? { gmailClient: createGmailPushClient(keychain, config.gmailPubSub) } : {}),
+    ...(config.gmailPubSub ? { gmailConfig: config.gmailPubSub } : {}),
+  });
+  const slackUserEvents = createSlackUserEvents({
+    signingSecret: () => secretSource.get("SLACK_OAUTH_SIGNING_SECRET"),
+    appToken: () => secretSource.get("SLACK_OAUTH_APP_TOKEN"),
+    loops: loopStore,
+    tokens: keychain ?? { connectorAccessToken: async () => null },
+    onConversationEvent: (event, opts) => inboxRealtime.onConversationEvent(event, opts),
+    ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
   });
   const loops: LoopServiceDeps = {
     lock: advisoryLock,
@@ -3012,6 +3023,7 @@ export function buildApp(
     loops,
     webhookReceiver,
     loopIngress,
+    slackUserEvents,
     admin,
     rateLimiter,
     errors,
@@ -3163,6 +3175,7 @@ export function serverDeps(
     scheduler: built.scheduler,
     webhookReceiver: built.webhookReceiver,
     loopIngress: built.loopIngress,
+    slackUserEvents: built.slackUserEvents,
     identity: built.identity,
     principalLinks: built.principalLinks,
     slackAccounts: built.slackAccounts,
@@ -3205,6 +3218,7 @@ export function serverDeps(
             featureFlags: built.featureFlags,
             items: built.loops.items,
             errors: built.errors,
+            enqueue: (loop, eventKey, entries) => built.loopIngress.enqueueConversation(loop, eventKey, entries),
             tokens: built.keychain,
             directory: built.directory,
             ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),

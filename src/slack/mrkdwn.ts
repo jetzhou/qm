@@ -38,6 +38,13 @@ export function setMentionIndex(index: ReadonlyMap<string, string>): void {
   for (const [name, id] of index) if (!byId.has(id)) byId.set(id, name);
   mentionNameById = byId;
 }
+let botNameById: ReadonlyMap<string, string> = new Map();
+export function setBotMentionName(id: string, name: string): void {
+  botNameById = new Map([...botNameById, [id, name]]);
+}
+export function slackMentionName(id: string): string | undefined {
+  return mentionNameById.get(id) ?? botNameById.get(id);
+}
 const WIRE_MENTION = /<(@[UW]\w+|!(?:here|channel|everyone|subteam\^\w+))(?:\|([^>]*))?>/gi;
 
 function neutralizedMention(kind: string, label: string | undefined): string {

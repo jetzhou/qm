@@ -66,11 +66,10 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
         const input = host.querySelector<HTMLTextAreaElement>(".composer-input")!;
         input.value = instruction;
         input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-        const send = host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!;
-        assert.equal(send.parentElement, host.querySelector(".inbox-chat-suggestions"));
-        assert.equal(send.parentElement!.firstElementChild, send);
-        assert.equal(send.parentElement!.parentElement, host.querySelector(".chat-bottom-dock"));
-        assert.equal(send.parentElement!.nextElementSibling, host.querySelector(".inbox-chat-composer"));
+        const send = host.querySelector<HTMLButtonElement>(".inbox-draft-send")!;
+        assert.equal(send.closest(".inbox-draft"), draft.closest(".inbox-draft"));
+        assert.equal(send.parentElement!.previousElementSibling, draft.closest(".inbox-draft-body-wrap"));
+        assert.equal(host.querySelector(".inbox-chat .inbox-draft-send"), null);
         assert.equal(host.querySelector(".inbox-chat-composer")!.textContent!.includes("Dismiss"), false);
         send.click();
         send.click();
@@ -89,13 +88,13 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
           fastMode: false,
         });
         render(html`${draftMessageTpl(item)}${chatTpl(item)}`, host);
-        assert.equal(host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!.disabled, true);
+        assert.equal(host.querySelector<HTMLButtonElement>(".inbox-draft-send")!.disabled, true);
         assert.equal(host.querySelector<HTMLTextAreaElement>(".inbox-draft-body")!.disabled, true);
         release();
         await new Promise((resolve) => setTimeout(resolve, 20));
         item.thread = [{ role: "human", text: "Make it shorter", at: 102 }];
         render(html`${draftMessageTpl(item)}${chatTpl(item)}`, host);
-        assert.equal(host.querySelectorAll(".inbox-chat-suggestions .inbox-suggest-chip.primary").length, 1);
+        assert.equal(host.querySelectorAll(".inbox-draft-send").length, 1);
         assert.equal(host.querySelectorAll(".inbox-chat-suggestion").length, 0);
         for (const status of ["sent", "dismissed", "replied"]) {
           render(html`${draftMessageTpl({ ...item, status })}${chatTpl({ ...item, status })}`, host);
@@ -131,7 +130,7 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
     staleDraft.value = "My edited reply";
     staleDraft.dispatchEvent(new dom.window.Event("input"));
     staleDraft.dispatchEvent(new dom.window.Event("blur"));
-    host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!.click();
+    host.querySelector<HTMLButtonElement>(".inbox-draft-send")!.click();
     await until(() => Boolean(host.querySelector(".composer-error")));
     assert.equal(staleCalls.filter((url) => url.endsWith("/action")).length, 1);
     assert.equal(staleCalls.filter((url) => url.endsWith("/followup")).length, 0);
@@ -272,7 +271,7 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
         draft.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
       }
       await until(() => Boolean(host.querySelector(".composer-input:not(:disabled)")));
-      host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!.click();
+      host.querySelector<HTMLButtonElement>(".inbox-draft-send")!.click();
       await until(() => Boolean(host.querySelector(".composer-error")));
       render(html`${draftMessageTpl(inboxState.items[0])}${chatTpl(inboxState.items[0])}`, host);
       assert.equal(host.querySelector<HTMLTextAreaElement>(".composer-input")!.value, "Send it");
@@ -281,7 +280,7 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
         failure === "save" ? "Keep my edit" : "New server draft",
       );
       assert.equal(calls.filter((path) => path.endsWith("/followup")).length, failure === "save" ? 0 : 1);
-      assert.equal(host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!.disabled, false);
+      assert.equal(host.querySelector<HTMLButtonElement>(".inbox-draft-send")!.disabled, false);
     }
   } finally {
     await close();

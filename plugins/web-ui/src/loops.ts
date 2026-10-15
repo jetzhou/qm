@@ -76,7 +76,7 @@ interface LoopDetail {
 
 interface IngestionSource {
   id: string;
-  kind: "webhook" | "slack" | "gmail";
+  kind: "webhook" | "slack" | "gmail" | "conversation";
   enabled: boolean;
   url: string;
   channels?: string[];
@@ -84,7 +84,7 @@ interface IngestionSource {
   lastReceivedAt?: number;
   lastError?: string;
 }
-let ingestion: { sources: IngestionSource[]; gmailAvailable: boolean } | null = null;
+let ingestion: { sources: IngestionSource[]; gmailAvailable: boolean; gmailMode?: "push" | "poll" } | null = null;
 let ingestionKind: IngestionSource["kind"] | "" = "";
 let ingestionSecret = "";
 let ingestionTeam = "";
@@ -619,7 +619,12 @@ async function addIngestion(loop: LoopView): Promise<void> {
 }
 
 function ingestionTpl(loop: LoopView): TemplateResult {
-  const names = { webhook: "Signed webhook", slack: "Slack events", gmail: "Gmail Pub/Sub" };
+  const names = {
+    webhook: "Signed webhook",
+    slack: "Slack events",
+    gmail: "Gmail",
+    conversation: "Conversation events",
+  };
   return html`<section class="loop-ingestion">
     <div class="loop-ingestion-heading">
       <h2>Ingestion</h2>
@@ -727,7 +732,7 @@ function ingestionTpl(loop: LoopView): TemplateResult {
           </div>`
         : nothing
     }
-    ${ingestionKind === "gmail" ? html`<p>${ingestion?.gmailAvailable ? "Uses your connected personal Gmail account. New Inbox messages become Loop work items." : "An administrator must configure the Google Cloud Pub/Sub topic, audience, and push service account before Gmail can be enabled."}</p>` : nothing}
+    ${ingestionKind === "gmail" ? html`<p>${ingestion?.gmailAvailable ? `Uses your connected personal Gmail account. New Inbox and sent messages reach this Loop ${ingestion.gmailMode === "poll" ? "within a minute (polling)" : "as they arrive"}.` : "An administrator must configure the Google Cloud Pub/Sub topic, audience, and push service account before Gmail can be enabled."}</p>` : nothing}
     ${ingestionKind ? html`<button class="btn compact" ?disabled=${loopBusy || (ingestionKind === "gmail" && !ingestion?.gmailAvailable)} @click=${() => void addIngestion(loop)}>${loopBusy ? "Connecting…" : `Enable ${names[ingestionKind]}`}</button>` : nothing}
   </section>`;
 }

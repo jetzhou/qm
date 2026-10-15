@@ -20,6 +20,7 @@ import {
   sleep,
 } from "./lib.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
+import { setBotMentionName } from "./mrkdwn.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 
 export interface BotIdentity {
@@ -148,7 +149,12 @@ export function createDirectory(deps: {
     const overrides = await internalOverrides();
     for await (const res of client.paginate("users.list", { limit: 1000 }) as AsyncIterable<any>) {
       for (const u of (res.members ?? []) as SlackUser[]) {
-        if (!u?.id || u.id === ids.botUserId) continue;
+        if (!u?.id) continue;
+        if (u.id === ids.botUserId) {
+          const name = u.profile?.display_name || u.real_name || u.name;
+          if (CORE_SINGLETON && name) setBotMentionName(u.id, name);
+          continue;
+        }
         const actor = withInternalOverride(
           deps.externalAccess
             ? companySlackActor(u, deps.externalAccess)

@@ -234,7 +234,7 @@ test("Gmail routes verified mailbox notifications and retains cursor across rene
 
 test("Gmail is opt in, personal-only, and never uses a company credential", async () => {
   const w = await world();
-  await assert.rejects(w.ingress.create(w.loop, { kind: "gmail" }), /administrator/);
+  await assert.rejects(w.ingress.create(w.loop, { kind: "gmail" }), /not available on this instance/);
   const accounts: Array<string | undefined> = [];
   const client = createGmailPushClient(
     {
@@ -439,4 +439,170 @@ test("revoking rollout blocks new deliveries and processing already queued work"
   await assert.rejects(denied.create(w.loop, { kind: "webhook" }), /not enabled/);
   await denied.setEnabled(w.loop.id, source.id, false);
   await assert.rejects(denied.setEnabled(w.loop.id, source.id, true), /not enabled/);
+});
+
+test("conversation events merge into the existing item, reopen it, and never invent one", async () => {
+  const w = await world();
+  await w.items.ingest([
+    {
+      loopId: w.loop.id,
+      dedupeKey: "thread-1",
+      source: "gmail",
+      summary: "Can you send the deck?",
+      sourceAt: 1000,
+      sourcePayload: {
+        source: "gmail",
+        title: "Deck",
+        snippet: "Can you send the deck?",
+        gmail: { threadId: "thread-1" },
+      },
+    },
+  ]);
+  const [item] = await w.items.byLoop(w.loop.id);
+  await w.items.recordAction(item!.id, { kind: "dismissed", outcome: "dismissed" });
+  const owner = { latestEvent: { author: "owner", at: 2000, text: "Sent" } };
+  assert.equal(
+    await w.ingress.enqueueConversation(w.loop, "e1", [
+      { loopId: w.loop.id, dedupeKey: "thread-1", sourceAt: 2000, merge: true, sourcePayload: owner },
+      { loopId: w.loop.id, dedupeKey: "unknown", sourceAt: 2000, merge: true, sourcePayload: owner },
+    ]),
+    true,
+  );
+  const [source] = (await w.ingress.list(w.loop.id)).filter((s) => s.kind === "conversation");
+  assert.ok(source);
+  // Enqueueing kicks the worker immediately; wait for it rather than racing it.
+  for (let i = 0; i < 100 && !w.fires.length; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  const all = await w.items.byLoop(w.loop.id);
+  assert.equal(all.length, 1);
+  assert.equal(w.fires.length, 1);
+  // The fake work stage dismissed it again, but only after the event reached it.
+  const after = all[0]!;
+  assert.equal(after.sourceAt, 2000);
+  assert.equal(after.sourceSummary, "Can you send the deck?");
+  assert.equal(after.sourcePayload?.title, "Deck");
+  assert.deepEqual(after.sourcePayload?.latestEvent, owner.latestEvent);
+  // Reusing an event key is a duplicate delivery.
+  await w.ingress.enqueueConversation(w.loop, "e1", [
+    { loopId: w.loop.id, dedupeKey: "thread-1", sourceAt: 3000, merge: true, sourcePayload: owner },
+  ]);
+  assert.equal((await w.deliveries.all()).length, 1);
+  // Conversation queues are internal: no HTTP delivery reaches them.
+  assert.equal((await w.ingress.receive(source.id, request("webhook", "x", {}))).status, 404);
+});
+
+test("conversation events are not queued for owners outside the rollout", async () => {
+  const w = await world();
+  const ingress = createLoopIngress({ ...w.deps, enabledFor: async () => false });
+  assert.equal(
+    await ingress.enqueueConversation(w.loop, "e1", [
+      { loopId: w.loop.id, dedupeKey: "k", sourceAt: 1, merge: true, sourcePayload: {} },
+    ]),
+    false,
+  );
+  assert.equal((await w.deliveries.all()).length, 0);
+});
+
+test("Gmail sent mail becomes an owner event on known threads only", async () => {
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("profile")) return Response.json({ emailAddress: "alice@example.com", historyId: "5" });
+    if (url.pathname.endsWith("history"))
+      return Response.json({
+        historyId: "6",
+        history: [
+          { messagesAdded: [{ message: { id: "sent" } }, { message: { id: "draft" } }, { message: { id: "in" } }] },
+        ],
+      });
+    const id = url.pathname.split("/").at(-1);
+    const labels: Record<string, string[]> = { sent: ["SENT"], draft: ["DRAFT"], in: ["INBOX", "UNREAD"] };
+    return Response.json({
+      id,
+      threadId: "thread-1",
+      internalDate: id === "sent" ? "2000" : "3000",
+      labelIds: labels[id!],
+      snippet: id === "sent" ? "Here you go" : "Thanks!",
+      payload: { headers: [{ name: "From", value: id === "sent" ? "alice@example.com" : "Bob <bob@example.com>" }] },
+    });
+  };
+  const client = createGmailPushClient({ connectorAccessToken: async () => "token" }, gmailConfig, fetchImpl);
+  const entries: any[] = [];
+  await client.changes("alice", "loop", { email: "alice@example.com", historyId: "1", expiresAt: 1 }, async (batch) => {
+    entries.push(...batch);
+  });
+  assert.equal(entries.length, 2);
+  assert.deepEqual(entries[0], {
+    loopId: "loop",
+    source: "gmail",
+    dedupeKey: "thread-1",
+    sourceAt: 2000,
+    merge: true,
+    sourcePayload: { latestEvent: { author: "owner", at: 2000, text: "Here you go" } },
+  });
+  assert.equal(entries[1].merge, undefined);
+  assert.deepEqual(entries[1].sourcePayload.latestEvent, {
+    author: "other",
+    at: 3000,
+    text: "Thanks!",
+    from: "Bob <bob@example.com>",
+  });
+});
+
+test("the events route queues owner and other messages for known conversations and rejects outsiders", async () => {
+  const w = await world();
+  await w.items.ingest([
+    { loopId: w.loop.id, dedupeKey: "t1", source: "gmail", sourceAt: 1000, sourcePayload: { snippet: "Ask" } },
+  ]);
+  const route = loopIngressRoutes.find((route) => "path" in route && route.path === "/v1/loops/:id/events")!;
+  const call = async (actor: string | null, body: unknown) => {
+    let status = 0;
+    await route.handle({
+      params: { id: w.loop.id },
+      url: new URL("http://local?principalId=alice"),
+      actor: actor ? { p: actor } : null,
+      capability: null,
+      body,
+      deps: { loops: { store: w.loops }, loopIngress: w.ingress, featureFlags: { enabled: async () => true } },
+      app: {
+        samePerson: async (a: string, b: string) => a === b,
+        membershipControlsScope: async () => false,
+        managesScope: async () => false,
+      },
+      res: {
+        getHeader: () => undefined,
+        writeHead: (value: number) => {
+          status = value;
+        },
+        end: () => {},
+      },
+    } as unknown as ApiCtx);
+    return status;
+  };
+  const event = { sourceKey: "t1", author: "owner", at: 2000, text: "Done" };
+  assert.equal(await call("mallory", { events: [event] }), 403);
+  assert.equal(await call("alice", { events: [{ ...event, author: "bot" }] }), 400);
+  assert.equal(await call("alice", { events: [] }), 400);
+  assert.equal(await call("alice", { events: [event] }), 202);
+  for (let i = 0; i < 100 && !w.fires.length; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  const [item] = await w.items.byLoop(w.loop.id);
+  assert.equal(item!.sourceAt, 2000);
+  assert.equal(item!.sourcePayload?.snippet, "Ask");
+  assert.deepEqual(item!.sourcePayload?.latestEvent, { author: "owner", at: 2000, text: "Done" });
+  assert.equal(w.fires.length, 1);
+});
+
+test("without Pub/Sub, Gmail reads its cursor from the profile and polls instead of watching", async () => {
+  const visited: string[] = [];
+  const client = createGmailPushClient(
+    { connectorAccessToken: async () => "token" },
+    undefined,
+    async (input, init) => {
+      visited.push(`${init?.method ?? "GET"} ${new URL(String(input)).pathname}`);
+      return Response.json({ emailAddress: "Alice@example.com", historyId: "42" });
+    },
+  );
+  const cursor = await client.watch("alice");
+  assert.equal(cursor.email, "alice@example.com");
+  assert.equal(cursor.historyId, "42");
+  assert.ok(cursor.expiresAt > Date.now());
+  assert.deepEqual(visited, ["GET /gmail/v1/users/me/profile"]);
 });
