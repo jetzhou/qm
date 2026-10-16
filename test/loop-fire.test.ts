@@ -984,11 +984,11 @@ test("triage groups a flood read-only so only the representative is worked, with
   const s = service((req) => {
     const text = req.text ?? "";
     if (text.startsWith("[Loop triage]")) {
+      const start = text.indexOf("```untrusted-data\n") + "```untrusted-data\n".length;
       const keys = new Map(
-        [...text.matchAll(/"id":"([^"]+)",(?:"new":true,)?"sourceKey":"([^"]+)"/g)].map((match) => [
-          match[2]!,
-          match[1]!,
-        ]),
+        (JSON.parse(text.slice(start, text.indexOf("\n```", start))) as Array<{ id: string; sourceKey: string }>).map(
+          (entry) => [entry.sourceKey, entry.id],
+        ),
       );
       const first = keys.get("SENTRY-1")!;
       return `\`\`\`json\n${JSON.stringify({

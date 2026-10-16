@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHmac } from "node:crypto";
-import { createLoopIngress, type LoopIngress, type IngressDelivery } from "../src/loops/ingress.ts";
+import { conversationEvent, createLoopIngress, type LoopIngress, type IngressDelivery } from "../src/loops/ingress.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
@@ -441,7 +441,7 @@ test("revoking rollout blocks new deliveries and processing already queued work"
   await assert.rejects(denied.setEnabled(w.loop.id, source.id, true), /not enabled/);
 });
 
-test("conversation events merge into the existing item, reopen it, and never invent one", async () => {
+test("conversation events reopen a known item for others' messages, skip the owner's on a closed one, and never invent one", async () => {
   const w = await world();
   await w.items.ingest([
     {
@@ -460,32 +460,38 @@ test("conversation events merge into the existing item, reopen it, and never inv
   ]);
   const [item] = await w.items.byLoop(w.loop.id);
   await w.items.recordAction(item!.id, { kind: "dismissed", outcome: "dismissed" });
-  const owner = { latestEvent: { author: "owner", at: 2000, text: "Sent" } };
+  const event = (sourceKey: string, author: "owner" | "other", at: number) =>
+    conversationEvent({ loopId: w.loop.id, sourceKey }, { author, at, text: author, from: "Bob" });
+  const until = async (done: () => Promise<boolean>) => {
+    for (let i = 0; i < 100 && !(await done()); i++) {
+      await w.ingress.maintain();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  };
+  const settled = () => until(async () => (await w.deliveries.all()).every((d) => d.completedAt));
   assert.equal(
-    await w.ingress.enqueueConversation(w.loop, [
-      { loopId: w.loop.id, dedupeKey: "thread-1", sourceAt: 2000, merge: true, sourcePayload: owner },
-      { loopId: w.loop.id, dedupeKey: "unknown", sourceAt: 2000, merge: true, sourcePayload: owner },
-    ]),
+    await w.ingress.enqueueConversation(w.loop, [event("thread-1", "owner", 1500), event("unknown", "other", 1500)]),
     true,
   );
+  await settled();
   assert.deepEqual(await w.ingress.list(w.loop.id), []);
-  const [source] = (await w.sources.all()).filter((s) => s.kind === "conversation");
-  assert.ok(source);
-  for (let i = 0; i < 100 && !w.fires.length; i++) await new Promise((resolve) => setTimeout(resolve, 5));
-  const all = await w.items.byLoop(w.loop.id);
-  assert.equal(all.length, 1);
-  assert.equal(w.fires.length, 1);
-  const after = all[0]!;
+  assert.equal((await w.items.byLoop(w.loop.id)).length, 1);
+  assert.equal((await w.items.get(item!.id))!.status, "skipped");
+  assert.equal(w.fires.length, 0);
+
+  await w.ingress.enqueueConversation(w.loop, [event("thread-1", "other", 2000)]);
+  await until(async () => w.fires.length > 0);
+  const after = (await w.items.get(item!.id))!;
   assert.equal(after.sourceAt, 2000);
   assert.equal(after.sourceSummary, "Can you send the deck?");
   assert.equal(after.sourcePayload?.title, "Deck");
-  assert.deepEqual(after.sourcePayload?.latestEvent, owner.latestEvent);
-  await w.ingress.enqueueConversation(w.loop, [
-    { loopId: w.loop.id, dedupeKey: "thread-1", sourceAt: 2000, merge: true, sourcePayload: owner },
-    { loopId: w.loop.id, dedupeKey: "unknown", sourceAt: 2000, merge: true, sourcePayload: owner },
-  ]);
-  assert.equal((await w.deliveries.all()).length, 1);
-  assert.equal((await w.ingress.receive(source.id, request("webhook", "x", {}))).status, 404);
+  assert.deepEqual(after.sourcePayload?.latestEvent, { author: "other", at: 2000, text: "other", from: "Bob" });
+  assert.equal(w.fires.length, 1);
+
+  await w.ingress.enqueueConversation(w.loop, [event("thread-1", "other", 2000)]);
+  assert.equal((await w.deliveries.all()).length, 2);
+  const [source] = (await w.sources.all()).filter((s) => s.kind === "conversation");
+  assert.equal((await w.ingress.receive(source!.id, request("webhook", "x", {}))).status, 404);
 });
 
 test("conversation events are not queued for owners outside the rollout", async () => {

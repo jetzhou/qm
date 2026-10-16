@@ -1,8 +1,9 @@
 import type { Loop, LoopItem } from "../types.ts";
+import type { LoopItemLedger } from "./item-ledger.ts";
 import { scopeId } from "../types.ts";
 import type { LoopStore } from "./loop-store.ts";
 import { SOURCE_IDS, adapterForItem } from "./sources/index.ts";
-import { EVENT_TEXT_CHARS } from "./ingress.ts";
+import { EVENT_TEXT_CHARS, type LatestEvent } from "./ingress.ts";
 
 const INBOX_LOOP_NAME = "Inbox";
 
@@ -71,7 +72,26 @@ export const REPLY_DECISION = [
   'If the person has already answered and nothing newer asks anything of them, end with {"resolution":{"kind":"replied","reason":"<one line>"}}. If the conversation needs nothing from them (closed out, a plain thanks, someone else answered, machine noise), end with {"resolution":{"kind":"no_reply_needed","reason":"<one line>"}}. Re-read the conversation from the source when the payload is not enough to tell. When in doubt, draft a reply.',
 ].join("\n");
 
-export function parseResolution(parsed: unknown): { kind: "replied" | "no_reply_needed"; reason: string } | null {
+export async function applyReplyResolution(
+  items: Pick<LoopItemLedger, "recordAction">,
+  loop: Loop,
+  item: LoopItem,
+  parsed: unknown,
+): Promise<boolean> {
+  const resolution = isReplyLoop(loop, item) ? parseResolution(parsed) : null;
+  if (!resolution) return false;
+  const latest = item.sourcePayload?.latestEvent as LatestEvent | undefined;
+  const ownText = latest?.author === "owner" ? latest.text : undefined;
+  const result = resolution.kind === "replied" ? ownText : resolution.reason;
+  await items.recordAction(item.id, {
+    kind: resolution.kind === "replied" ? "replied" : "dismissed",
+    outcome: "dismissed",
+    ...(result ? { result } : {}),
+  });
+  return true;
+}
+
+function parseResolution(parsed: unknown): { kind: "replied" | "no_reply_needed"; reason: string } | null {
   if (!parsed || typeof parsed !== "object" || !("resolution" in parsed)) return null;
   const raw = (parsed as { resolution?: unknown }).resolution;
   if (!raw || typeof raw !== "object") return null;

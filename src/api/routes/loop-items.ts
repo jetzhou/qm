@@ -403,12 +403,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
       if (result.payloadPatch) item = (await deps.items.annotate(item.id, result.payloadPatch)) ?? item;
       if (result.resolves === false)
         return sendJson(ctx.res, 200, { item: ledgerItemView(item, loop, !!ctx.capability) });
-      const next = await deps.items.recordAction(item.id, {
-        kind,
-        outcome: "actioned",
-        result: result.result,
-        sourceAt: Math.max(Date.now(), (item.sourceAt ?? 0) + 1),
-      });
+      const next = await deps.items.recordAction(item.id, { kind, outcome: "actioned", result: result.result });
       return sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, loop, !!ctx.capability) });
     } finally {
       await deps.items.releaseDecision(item.id, decisionToken);

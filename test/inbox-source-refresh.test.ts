@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createInboxSourceRefresh } from "../src/loops/inbox-source-refresh.ts";
+import { createInboxSourceRefresh as createRefresh } from "../src/loops/inbox-source-refresh.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import type { IngressEntry } from "../src/loops/ingress.ts";
 
@@ -19,7 +19,11 @@ async function fixture(source = "gmail", meta: Record<string, unknown> = { threa
   return { items, item: (await items.byLoop("inbox"))[0]! };
 }
 const featureFlags = { enabled: async () => true };
-const noEnqueue = async () => undefined;
+const createInboxSourceRefresh = (
+  deps: Omit<Parameters<typeof createRefresh>[0], "enqueue"> & {
+    enqueue?: Parameters<typeof createRefresh>[0]["enqueue"];
+  },
+) => createRefresh({ enqueue: async () => undefined, ...deps });
 function recorder() {
   const events: unknown[] = [];
   const enqueue = async (_loop: unknown, entries: IngressEntry[]) => {
@@ -102,7 +106,6 @@ test("provider failure or missing connection preserves the item with an explicit
     await createInboxSourceRefresh({
       featureFlags,
       items,
-      enqueue: noEnqueue,
       tokens: { connectorAccessToken: async () => (connected ? "test" : null) },
       directory,
       fetchImpl: async () => new Response("unavailable", { status: 503 }),
@@ -119,7 +122,6 @@ test("a new inbound message during a provider read wins over the older own reply
   await createInboxSourceRefresh({
     featureFlags,
     items,
-    enqueue: noEnqueue,
     tokens,
     directory,
     fetchImpl: async () => {
@@ -176,7 +178,6 @@ test("top-level/private-channel mentions fetch just their root and replies, neve
     await createInboxSourceRefresh({
       featureFlags,
       items,
-      enqueue: noEnqueue,
       tokens,
       directory,
       fetchImpl: slackFetch(calls),
@@ -231,7 +232,6 @@ test("rate limiting is respected across different Slack items and never triggers
   const refresh = createInboxSourceRefresh({
     featureFlags,
     items,
-    enqueue: noEnqueue,
     tokens,
     directory,
     fetchImpl: async (url) => {
@@ -253,7 +253,6 @@ test("slow Gmail reads have a total batch budget and later cards are visited on 
   const refresh = createInboxSourceRefresh({
     featureFlags,
     items,
-    enqueue: noEnqueue,
     tokens,
     directory,
     now: () => clock,
@@ -276,7 +275,6 @@ test("Slack avatars come from the org directory without the owner's Slack login 
   const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
   const looked: string[] = [];
   const refresh = createInboxSourceRefresh({
-    enqueue: noEnqueue,
     featureFlags,
     items,
     tokens: { connectorAccessToken: async () => null },
@@ -297,7 +295,6 @@ test("missing or unsafe directory photos retain initials", async () => {
   for (const avatarUrl of [undefined, "http://example.com/photo.png", "javascript:alert(1)"]) {
     const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
     await createInboxSourceRefresh({
-      enqueue: noEnqueue,
       featureFlags,
       items,
       tokens,
@@ -310,7 +307,6 @@ test("missing or unsafe directory photos retain initials", async () => {
 test("avatar-only refresh does not suppress full Slack context refresh", async () => {
   const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0", userId: "U1" });
   const refresh = createInboxSourceRefresh({
-    enqueue: noEnqueue,
     featureFlags,
     items,
     tokens,
@@ -329,7 +325,6 @@ test("avatar-only refresh does not suppress full Slack context refresh", async (
 test("a newer message during an avatar lookup cannot acquire the previous sender's photo", async () => {
   const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
   await createInboxSourceRefresh({
-    enqueue: noEnqueue,
     featureFlags,
     items,
     tokens,
@@ -351,7 +346,6 @@ test("a newer message during an avatar lookup cannot acquire the previous sender
 test("concurrent list and detail refreshes preserve the authoritative Slack thread metadata", async () => {
   const { items, item } = await fixture("slack", { channelId: "C_GROUP_DM", ts: "1.0", userId: "U1" });
   const refresh = createInboxSourceRefresh({
-    enqueue: noEnqueue,
     featureFlags,
     items,
     tokens,
@@ -369,7 +363,6 @@ test("partial profile failures keep saved photos and names while saving successf
   const saved = { id: "U2", name: "Taylor", avatarUrl: "https://avatars.slack-edge.com/taylor.png" };
   await items.annotate(item.id, { participants: [{ id: "U1", name: "Alex" }, saved] });
   await createInboxSourceRefresh({
-    enqueue: noEnqueue,
     featureFlags,
     items,
     tokens,
@@ -384,7 +377,6 @@ test("partial profile failures keep saved photos and names while saving successf
   assert.deepEqual(after.proposal, item.proposal);
   const looked: string[] = [];
   await createInboxSourceRefresh({
-    enqueue: noEnqueue,
     featureFlags,
     items,
     tokens,
@@ -399,7 +391,6 @@ test("opening a thread retains cached photos and author names when profile reads
   const saved = { id: "U1", name: "Alex", avatarUrl: ALEX };
   await items.annotate(item.id, { participants: [saved], slackAvatarsRefreshAt: 99_000_000 });
   await createInboxSourceRefresh({
-    enqueue: noEnqueue,
     featureFlags,
     items,
     tokens,
@@ -429,7 +420,6 @@ test("thread profile limits prioritize the waiting sender and latest visible aut
     ]),
   );
   await createInboxSourceRefresh({
-    enqueue: noEnqueue,
     featureFlags,
     items,
     tokens,
@@ -459,7 +449,6 @@ test("thread profile limits prioritize the waiting sender and latest visible aut
 test("bot and external-user messages use profiles already returned by Slack", async () => {
   const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0" });
   await createInboxSourceRefresh({
-    enqueue: noEnqueue,
     featureFlags,
     items,
     tokens,
@@ -504,7 +493,7 @@ test("a partial source page cannot replace the waiting sender with an unrelated 
       if (!String(url).includes("conversations.history")) return response;
       return json({ ok: true, messages: [{ ts: "2.0", user: "U_OTHER", text: "Newer message" }] });
     };
-    await createInboxSourceRefresh({ enqueue: noEnqueue, featureFlags, items, tokens, directory, fetchImpl })("owner", [
+    await createInboxSourceRefresh({ featureFlags, items, tokens, directory, fetchImpl })("owner", [
       (await items.get(item.id))!,
     ]);
     assert.equal(((await items.get(item.id))!.sourcePayload!.participants as Array<{ id: string }>)[0]!.id, "U1");
@@ -523,7 +512,6 @@ test("cosmetic avatar refresh never waits for an in-flight full conversation ref
   });
   const sourceFetch = slackFetch([]);
   const refresh = createInboxSourceRefresh({
-    enqueue: noEnqueue,
     featureFlags,
     items,
     tokens,
@@ -562,7 +550,6 @@ test("a second core's full refresh wins over a stale cosmetic profile refresh", 
     release = resolve;
   });
   const avatars = createInboxSourceRefresh({
-    enqueue: noEnqueue,
     featureFlags,
     items,
     tokens,
@@ -578,7 +565,6 @@ test("a second core's full refresh wins over a stale cosmetic profile refresh", 
   const sourceFetch = slackFetch([], { own: true });
   try {
     await createInboxSourceRefresh({
-      enqueue: noEnqueue,
       featureFlags,
       items,
       tokens,
@@ -607,7 +593,6 @@ test("unverified waiting senders never inherit another context author's avatar",
     U_OTHER: { displayName: "Someone Else", avatarUrl: "https://avatars.slack-edge.com/other.png" },
   });
   await createInboxSourceRefresh({
-    enqueue: noEnqueue,
     featureFlags,
     items,
     tokens,
@@ -635,7 +620,6 @@ test("saved participants do not supply a missing sender identity", async () => {
     const before = (await items.get(item.id))!;
     const looked: string[] = [];
     await createInboxSourceRefresh({
-      enqueue: noEnqueue,
       featureFlags,
       items,
       tokens,
@@ -660,7 +644,6 @@ test("profile failures retain diagnostics without exposing credentials", async (
     const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
     const errors = createErrorLog();
     await createInboxSourceRefresh({
-      enqueue: noEnqueue,
       featureFlags,
       items,
       tokens,
@@ -684,7 +667,6 @@ test("cosmetic refresh records ledger failures without rejecting the inbox reque
   const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
   const errors = createErrorLog();
   await createInboxSourceRefresh({
-    enqueue: noEnqueue,
     featureFlags,
     items: {
       ...items,
@@ -715,7 +697,6 @@ test("Inbox source refresh checks the owner rollout before credentials, reads, o
     const calls: string[] = [];
     let credentials = 0;
     const refresh = createInboxSourceRefresh({
-      enqueue: noEnqueue,
       items,
       featureFlags: flags,
       tokens: {
@@ -754,7 +735,6 @@ test("Slack-id principals and items without a known sender use only the director
       id === "U1" ? { principalId: "U1", displayName: "Alex", type: "internal" as const, avatarUrl: ALEX } : null,
   };
   await createInboxSourceRefresh({
-    enqueue: noEnqueue,
     featureFlags,
     items,
     tokens,
@@ -766,7 +746,6 @@ test("Slack-id principals and items without a known sender use only the director
   ]);
   const legacy = await fixture("slack", { channelId: "D2", ts: "1.0" });
   await createInboxSourceRefresh({
-    enqueue: noEnqueue,
     featureFlags,
     items: legacy.items,
     tokens,
@@ -779,7 +758,6 @@ test("Slack-id principals and items without a known sender use only the director
 test("people outside the directory keep the profile Slack returned with their message", async () => {
   const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0" });
   await createInboxSourceRefresh({
-    enqueue: noEnqueue,
     featureFlags,
     items,
     tokens,
@@ -811,7 +789,6 @@ test("people outside the directory keep the profile Slack returned with their me
 test("people outside the directory without message profiles keep initials and never trigger profile API calls", async () => {
   const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0", userId: "U_EXT" });
   await createInboxSourceRefresh({
-    enqueue: noEnqueue,
     featureFlags,
     items,
     tokens,

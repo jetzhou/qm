@@ -5,6 +5,7 @@ import type { Loop, LoopItem } from "../types.ts";
 import type { LoopStore } from "./loop-store.ts";
 import type { IngestEntryInput, LoopItemLedger } from "./item-ledger.ts";
 import type { LoopOutputStore } from "./output-store.ts";
+import { isResolved } from "./ledger-view.ts";
 import type { LoopFireService } from "./loop-fire.ts";
 import { getVerifier, type VerifierInput } from "../webhooks/verifiers.ts";
 import { hashId } from "../util/crypto.ts";
@@ -61,10 +62,12 @@ export function conversationEvent(
   };
 }
 
-export function ledgerEntry(raw: IngressEntry, existing: LoopItem | undefined): IngestEntryInput | null {
+function ledgerEntry(raw: IngressEntry, existing: LoopItem | undefined): IngestEntryInput | null {
   const { merge, ...base } = raw;
   if (!merge) return base;
   if (!existing) return null;
+  if (isResolved(existing) && (base.sourcePayload?.latestEvent as LatestEvent | undefined)?.author === "owner")
+    return null;
   return {
     ...base,
     ...(base.source === undefined && existing.source !== undefined ? { source: existing.source } : {}),
@@ -178,6 +181,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
           });
           await deps.sources.merge(source.id, { lastError: undefined });
         } catch (error) {
+          if (source.kind === "conversation") swallow("Loop conversation event", error);
           await deps.sources.merge(source.id, { lastError: errMessage(error) });
           await deps.deliveries.merge(delivery.id, {
             nextAttemptAt: Date.now() + Math.min(3_600_000, 30_000 * 2 ** Math.min(attempt, 7)),

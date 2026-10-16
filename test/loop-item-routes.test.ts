@@ -5,7 +5,6 @@ import type { LoopServiceDeps } from "../src/api/routes/loops.ts";
 import { findRoute, run, type ApiCtx } from "../src/api/routes/route.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
-import { conversationEvent, ledgerEntry } from "../src/loops/ingress.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
@@ -380,22 +379,12 @@ test("edit replaces the proposal and marks it the person's own", async () => {
 test("send posts through the source adapter, records the outcome, and refuses a resend", async () => {
   const w = world();
   const { loop, item } = await seed(w);
-  const sentAt = Date.now();
   const sent = await call(w, {
     method: "POST",
     path: `/v1/loops/${loop.id}/items/${item.id}/action`,
     body: { kind: "send" },
   });
   assert.equal(sent.status, 200, JSON.stringify(sent.body));
-  const echo = ledgerEntry(
-    conversationEvent(
-      { loopId: loop.id, sourceKey: item.dedupeKey },
-      { author: "owner", at: sentAt, text: "Looking now" },
-    ),
-    (await w.loops.items.get(item.id)) ?? undefined,
-  );
-  await w.loops.items.ingest([echo!]);
-  assert.equal((await w.loops.items.get(item.id))!.status, "shipped", "the reply's own echo does not reopen it");
   const view = (sent.body as { item: LedgerItemView }).item;
   assert.equal(view.state, "actioned");
   assert.equal(view.actionResult, "Looking now — back to you within the hour.");
