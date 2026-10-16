@@ -850,19 +850,6 @@ test("inbox sync exceptions count once and recover on a successful retry", async
   assert.equal(s.turns.length, 2);
 });
 
-test("inbox sync carries the owner's own playbook rules into the scan", async () => {
-  const s = service(() => "Synced");
-  const loop = await makeLoop(s.loops, {
-    surface: "inbox:gmail",
-    sources: ["gmail"],
-    playbook: "Built-in snapshot.\n\n## My rules\n- Only track email where I am on the To line.",
-  });
-  assert.equal((await s.fire.fire(loop.id, "rules")).status, "silent");
-  const sync = s.turns[0]!.text!;
-  assert.ok(sync.includes("- Only track email where I am on the To line."));
-  assert.ok(!sync.includes("Built-in snapshot."));
-});
-
 test("event-only Email work skips scanning and holds its draft instead of marking it shipped", async () => {
   const w = service((req) => {
     if (stage(req) === "intake") throw new Error("Event work must not enumerate");
@@ -997,13 +984,19 @@ test("triage groups a flood read-only so only the representative is worked, with
   const s = service((req) => {
     const text = req.text ?? "";
     if (text.startsWith("[Loop triage]")) {
-      const ids = [...text.matchAll(/"id":"([^"]+)"/g)].map((match) => match[1]!);
+      const keys = new Map(
+        [...text.matchAll(/"id":"([^"]+)",(?:"new":true,)?"sourceKey":"([^"]+)"/g)].map((match) => [
+          match[2]!,
+          match[1]!,
+        ]),
+      );
+      const first = keys.get("SENTRY-1")!;
       return `\`\`\`json\n${JSON.stringify({
-        items: ids.map((id, index) => ({
+        items: [...keys.values()].map((id) => ({
           id,
-          priority: "urgent",
+          priority: id === first ? "urgent" : "low",
           reason: "checkout is down",
-          ...(index > 0 ? { groupWith: ids[0] } : {}),
+          ...(id !== first ? { groupWith: first } : {}),
         })),
       })}\n\`\`\``;
     }

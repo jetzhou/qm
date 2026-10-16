@@ -234,7 +234,7 @@ test("Gmail routes verified mailbox notifications and retains cursor across rene
 
 test("Gmail is opt in, personal-only, and never uses a company credential", async () => {
   const w = await world();
-  await assert.rejects(w.ingress.create(w.loop, { kind: "gmail" }), /not available on this instance/);
+  await assert.rejects(w.ingress.create(w.loop, { kind: "gmail" }), /administrator/);
   const accounts: Array<string | undefined> = [];
   const client = createGmailPushClient(
     {
@@ -581,21 +581,4 @@ test("the events route queues owner and other messages for known conversations a
   assert.equal(item!.sourcePayload?.snippet, "Ask");
   assert.deepEqual(item!.sourcePayload?.latestEvent, { author: "owner", at: 2000, text: "Done" });
   assert.equal(w.fires.length, 1);
-});
-
-test("without Pub/Sub, Gmail reads its cursor from the profile and polls instead of watching", async () => {
-  const visited: string[] = [];
-  const client = createGmailPushClient(
-    { connectorAccessToken: async () => "token" },
-    undefined,
-    async (input, init) => {
-      visited.push(`${init?.method ?? "GET"} ${new URL(String(input)).pathname}`);
-      return Response.json({ emailAddress: "Alice@example.com", historyId: "42" });
-    },
-  );
-  const cursor = await client.watch("alice");
-  assert.equal(cursor.email, "alice@example.com");
-  assert.equal(cursor.historyId, "42");
-  assert.ok(cursor.expiresAt > Date.now());
-  assert.deepEqual(visited, ["GET /gmail/v1/users/me/profile"]);
 });

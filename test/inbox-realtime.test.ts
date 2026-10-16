@@ -280,19 +280,3 @@ test("the inbox sync task asks for the full waiting message", () => {
   assert.match(task, /snippet \(the full text of the waiting message/);
   assert.doesNotMatch(task, /snippet \(the waiting message, <=200 chars\)/);
 });
-
-test("an event seen through one person's Slack only touches that person's Loops", async () => {
-  const items = createLoopItemLedger();
-  await items.ingest([slackEntry()]);
-  const rt = realtime(items);
-  await rt.onConversationEvent(
-    { source: "slack", conversationRef: "D123", at: 2_000_000, text: "hi" },
-    { owners: ["someone@example.com"] },
-  );
-  assert.equal(rt.calls.length, 0);
-  await rt.onConversationEvent(
-    { source: "slack", conversationRef: "D123", at: 2_000_000, text: "hi" },
-    { owners: ["OWNER@example.com"] },
-  );
-  assert.equal(rt.calls.length, 1);
-});

@@ -33,7 +33,6 @@ import { createSessionMailbox, type SessionMessage } from "./sessions/session-ma
 import type { TaskAckState } from "./slack/task-ack.ts";
 import { createLoopIngress, type LoopIngressService, type LoopIngress, type IngressDelivery } from "./loops/ingress.ts";
 import { createGmailPushClient } from "./loops/gmail-push.ts";
-import { createSlackUserEvents, type SlackUserEvents } from "./loops/slack-user-events.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
 import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from "./memory/tidy.ts";
@@ -534,7 +533,6 @@ export interface BuiltApp {
   loops: LoopServiceDeps;
   webhookReceiver: WebhookReceiver;
   loopIngress: LoopIngressService;
-  slackUserEvents: SlackUserEvents;
   admin: AdminService;
   rateLimiter: RateLimiter;
   errors: ErrorLog;
@@ -2596,15 +2594,9 @@ export function buildApp(
     outputs: loopOutputs,
     fire: loopFire,
     lock: advisoryLock,
-    ...(keychain ? { gmailClient: createGmailPushClient(keychain, config.gmailPubSub) } : {}),
-    ...(config.gmailPubSub ? { gmailConfig: config.gmailPubSub } : {}),
-  });
-  const slackUserEvents = createSlackUserEvents({
-    signingSecret: () => secretSource.get("SLACK_OAUTH_SIGNING_SECRET"),
-    loops: loopStore,
-    tokens: keychain ?? { connectorAccessToken: async () => null },
-    slackClient: slackUserClientFactory(config.slack?.apiUrl),
-    onConversationEvent: (event, opts) => inboxRealtime.onConversationEvent(event, opts),
+    ...(config.gmailPubSub && keychain
+      ? { gmailConfig: config.gmailPubSub, gmailClient: createGmailPushClient(keychain, config.gmailPubSub) }
+      : {}),
   });
   const loops: LoopServiceDeps = {
     lock: advisoryLock,
@@ -3020,7 +3012,6 @@ export function buildApp(
     loops,
     webhookReceiver,
     loopIngress,
-    slackUserEvents,
     admin,
     rateLimiter,
     errors,
@@ -3172,7 +3163,6 @@ export function serverDeps(
     scheduler: built.scheduler,
     webhookReceiver: built.webhookReceiver,
     loopIngress: built.loopIngress,
-    slackUserEvents: built.slackUserEvents,
     identity: built.identity,
     principalLinks: built.principalLinks,
     slackAccounts: built.slackAccounts,

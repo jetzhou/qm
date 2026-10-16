@@ -138,23 +138,6 @@ export const loopIngressRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/loops/:id/events", auth: "either", handle: events },
 ];
 
-async function slackUserEvents(ctx: BaseCtx) {
-  if (!ctx.deps.slackUserEvents) {
-    ctx.req.resume();
-    return sendJson(ctx.res, 404, { error: "not_found" });
-  }
-  try {
-    const rawBody = await readRawBody(ctx.req);
-    const result = await ctx.deps.slackUserEvents.receive({ headers: ctx.req.headers, rawBody });
-    ctx.res.writeHead(result.status, { "content-type": "text/plain", "cache-control": "no-store" });
-    ctx.res.end(result.body);
-  } catch (error) {
-    if (error instanceof PayloadTooLargeError) return sendJson(ctx.res, 413, { error: "payload_too_large" });
-    throw error;
-  }
-}
-
 export const loopIngressRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "POST", path: "/v1/slack/user-events", auth: "public", handle: slackUserEvents },
   { method: "POST", path: "/v1/loop-ingress/:id", auth: "public", handle: receive },
 ];

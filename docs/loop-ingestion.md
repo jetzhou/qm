@@ -62,17 +62,11 @@ Do not paste webhook signing secrets into chat, playbooks, or committed configur
 Every new message in a conversation already on an inbox ledger is an event, and
 every event is judged by the Loop's work stage. Nothing resolves an item in code.
 
-- **Sources.** QM's Slack bot, the Slack connector app's user-token Events API
-  (`POST /v1/slack/user-events`), Gmail history (INBOX and SENT), the inbox
-  open-time source check, and the scheduled sync (`POST /v1/loops/:id/events`).
+- **Sources.** QM's Slack bot, Gmail history (INBOX and SENT), the inbox open-time
+  source check, and the scheduled sync (`POST /v1/loops/:id/events`).
 - **Queue.** Events land durably in a per-Loop internal `conversation` ingress
   source, deduplicated by conversation and message time. They merge
   `sourcePayload.latestEvent` into the existing item and refresh `sourceAt`, which
   reopens a resolved item. Events never create items.
 - **Decision.** The work stage returns a draft, or
   `{"resolution":{"kind":"replied"|"no_reply_needed"}}`, which dismisses the item.
-- **Slack connector app.** Subscribe the app to the user events `message.im`,
-  `message.mpim`, `message.channels` and `message.groups` with the Request URL
-  `<PUBLIC_API_URL>/v1/slack/user-events`, and set `SLACK_OAUTH_SIGNING_SECRET`.
-- **Gmail without Pub/Sub.** When `GMAIL_PUBSUB_*` is unset, Gmail ingestion sources
-  poll their history cursor every minute instead of registering a watch.

@@ -8,7 +8,7 @@ const INBOX_LOOP_NAME = "Inbox";
 
 const INBOX_LOOP_SURFACE = "inbox";
 
-export const INBOX_SYNC_TASK_VERSION = 6;
+export const INBOX_SYNC_TASK_VERSION = 7;
 
 export const INBOX_SYNC_DEFAULT_EVERY_MS = 15 * 60 * 1000;
 
@@ -60,20 +60,6 @@ export async function ensureDefaultInboxLoops(store: LoopStore, owner: string): 
     loops.push(loop);
   }
   return loops;
-}
-
-const INBOX_OWNER_RULES_HEADING = "## My rules";
-
-function inboxOwnerRules(playbook: string): string {
-  const at = playbook.indexOf(INBOX_OWNER_RULES_HEADING);
-  return at < 0 ? "" : playbook.slice(at + INBOX_OWNER_RULES_HEADING.length).trim();
-}
-
-export function withInboxOwnerRules(task: string, playbook: string): string {
-  const rules = inboxOwnerRules(playbook);
-  return rules
-    ? `${task}\n\nThe owner's own rules for this Loop. Follow them when deciding what to ingest; they override the defaults above:\n${rules}`
-    : task;
 }
 
 export function isReplyLoop(loop: Loop, item: LoopItem): boolean {

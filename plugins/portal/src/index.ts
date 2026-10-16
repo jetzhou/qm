@@ -1185,9 +1185,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   if (
     method === "POST" &&
-    (/^\/v1\/webhooks\/incoming\/[^/]+$/.test(pathname) ||
-      /^\/v1\/loop-ingress\/[^/]+$/.test(pathname) ||
-      pathname === "/v1/slack/user-events")
+    (/^\/v1\/webhooks\/incoming\/[^/]+$/.test(pathname) || /^\/v1\/loop-ingress\/[^/]+$/.test(pathname))
   ) {
     return proxyToUpstream(
       req,

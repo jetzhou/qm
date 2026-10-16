@@ -39,13 +39,7 @@ interface GmailMessage {
   payload?: { headers?: Array<{ name: string; value: string }> };
 }
 
-const POLL_CURSOR_TTL_MS = 7 * 86_400_000;
-
-export function createGmailPushClient(
-  tokens: ConnectorTokenSource,
-  config: GmailPushConfig | undefined,
-  fetchImpl = fetch,
-) {
+export function createGmailPushClient(tokens: ConnectorTokenSource, config: GmailPushConfig, fetchImpl = fetch) {
   async function request<T>(owner: string, path: string, body?: unknown): Promise<T> {
     const token = await tokens.connectorAccessToken("gmail.googleapis.com", owner, "personal");
     if (!token) throw new Error("Connect a personal Gmail account before enabling Gmail Pub/Sub.");
@@ -64,16 +58,6 @@ export function createGmailPushClient(
 
   return {
     async watch(owner: string): Promise<GmailCursor> {
-      if (!config) {
-        const profile = await request<{ emailAddress: string; historyId: string }>(owner, "profile");
-        if (!profile.emailAddress || !/^\d+$/.test(String(profile.historyId)))
-          throw new Error("Gmail returned an invalid profile");
-        return {
-          email: profile.emailAddress.toLowerCase(),
-          historyId: String(profile.historyId),
-          expiresAt: Date.now() + POLL_CURSOR_TTL_MS,
-        };
-      }
       const profile = await request<{ emailAddress: string }>(owner, "profile");
       const watch = await request<{ historyId: string; expiration: string }>(owner, "watch", {
         topicName: config.topic,

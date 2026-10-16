@@ -2,7 +2,6 @@ import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts
 import {
   renderSourceInboxTask,
   renderInboxSyncTask,
-  withInboxOwnerRules,
   isReplyLoop,
   parseResolution,
   REPLY_DECISION,
@@ -684,14 +683,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
           loop,
           `${fireKey}:sync`,
           threadRef,
-          promptText(
-            withInboxOwnerRules(
-              loop.surface === "inbox"
-                ? renderInboxSyncTask(loop.id)
-                : renderSourceInboxTask(loop.id, loop.sources![0]!),
-              loop.playbook,
-            ),
-          ),
+          loop.surface === "inbox" ? renderInboxSyncTask(loop.id) : renderSourceInboxTask(loop.id, loop.sources![0]!),
         );
         if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
         failure = stageFailure("inbox sync", outcome)?.error.message;

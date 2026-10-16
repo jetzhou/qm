@@ -248,7 +248,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
   }
 
   return {
-    gmailAvailable: Boolean(deps.gmailClient),
+    gmailAvailable: Boolean(deps.gmailConfig && deps.gmailClient),
     async enqueueConversation(loop: Pick<Loop, "id" | "owner">, entries: IngressEntry[]): Promise<boolean> {
       if (!entries.length || !(await deps.enabledFor(loop.owner))) return false;
       const source = await conversationSource(loop);
@@ -293,7 +293,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
           createdAt: Date.now(),
         };
         if (input.kind === "gmail") {
-          if (!deps.gmailClient) throw new Error("Gmail ingestion is not available on this instance");
+          if (!deps.gmailClient) throw new Error("An administrator must configure Gmail Pub/Sub first");
           source.gmail = await deps.gmailClient.watch(loop.owner);
           source.nextWatchAt = Date.now() + 86_400_000;
         } else {
@@ -460,9 +460,8 @@ export function createLoopIngress(deps: LoopIngressDeps) {
           });
         }
         if (source.kind === "gmail" && (source.nextReconcileAt ?? 0) <= Date.now()) {
-          const every = deps.gmailConfig ? 600_000 : 60_000;
-          await enqueue(source, `reconcile:${Math.floor(Date.now() / every)}`, {});
-          await deps.sources.merge(source.id, { nextReconcileAt: Date.now() + every });
+          await enqueue(source, `reconcile:${Math.floor(Date.now() / 600_000)}`, {});
+          await deps.sources.merge(source.id, { nextReconcileAt: Date.now() + 600_000 });
         }
       }
       for (const source of sources) {

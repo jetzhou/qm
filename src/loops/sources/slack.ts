@@ -79,7 +79,7 @@ function itemReactions(item: LoopItem): string[] {
   return Array.isArray(raw) ? raw.filter((name): name is string => typeof name === "string") : [];
 }
 
-export function slackUserClientFactory(apiUrl?: string): (token: string) => WebClient {
+export function slackUserClientFactory(apiUrl?: string): (token: string) => SlackUserClient {
   const options = apiUrl ? { slackApiUrl: normalizeSlackApiUrl(apiUrl) } : {};
   return (token) => new WebClient(token, options);
 }

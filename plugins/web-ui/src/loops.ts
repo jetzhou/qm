@@ -619,7 +619,7 @@ async function addIngestion(loop: LoopView): Promise<void> {
 }
 
 function ingestionTpl(loop: LoopView): TemplateResult {
-  const names = { webhook: "Signed webhook", slack: "Slack events", gmail: "Gmail" };
+  const names = { webhook: "Signed webhook", slack: "Slack events", gmail: "Gmail Pub/Sub" };
   return html`<section class="loop-ingestion">
     <div class="loop-ingestion-heading">
       <h2>Ingestion</h2>
@@ -727,7 +727,7 @@ function ingestionTpl(loop: LoopView): TemplateResult {
           </div>`
         : nothing
     }
-    ${ingestionKind === "gmail" ? html`<p>${ingestion?.gmailAvailable ? "Uses your connected personal Gmail account. New Inbox and sent messages become Loop events." : "An administrator must configure the Google Cloud Pub/Sub topic, audience, and push service account before Gmail can be enabled."}</p>` : nothing}
+    ${ingestionKind === "gmail" ? html`<p>${ingestion?.gmailAvailable ? "Uses your connected personal Gmail account. New Inbox messages become Loop work items." : "An administrator must configure the Google Cloud Pub/Sub topic, audience, and push service account before Gmail can be enabled."}</p>` : nothing}
     ${ingestionKind ? html`<button class="btn compact" ?disabled=${loopBusy || (ingestionKind === "gmail" && !ingestion?.gmailAvailable)} @click=${() => void addIngestion(loop)}>${loopBusy ? "Connecting…" : `Enable ${names[ingestionKind]}`}</button>` : nothing}
   </section>`;
 }

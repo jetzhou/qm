@@ -246,7 +246,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/loops/:id/items/:itemId/action",
         summary:
-          'act on a held item — body {kind, args?}. kind "edit" replaces the proposal ({args:{proposal}}), "dismiss" drops the item, "reopen" un-dismisses it, "replied" ({args:{text}}) closes an item the person already answered themselves outside QM and never demotes one sent from here, and any action the loop\'s source declares (e.g. "send", or Slack\'s "react" with {args:{name}}, which annotates the item without closing it) executes it and records the outcome',
+          'act on a held item — body {kind, args?}. kind "edit" replaces the proposal ({args:{proposal}}), "dismiss" drops the item, "reopen" un-dismisses it, and any action the loop\'s source declares (e.g. "send", or Slack\'s "react" with {args:{name}}, which annotates the item without closing it) executes it and records the outcome',
       },
       {
         method: "POST",
