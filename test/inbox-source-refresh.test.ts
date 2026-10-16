@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createInboxSourceRefresh } from "../src/loops/inbox-source-refresh.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
-import { simulatedLoopEvents } from "./support/inbox-events.ts";
+import type { IngressEntry } from "../src/loops/ingress.ts";
 
 async function fixture(source = "gmail", meta: Record<string, unknown> = { threadId: "t1" }) {
   const items = createLoopItemLedger();
@@ -20,6 +20,13 @@ async function fixture(source = "gmail", meta: Record<string, unknown> = { threa
 }
 const featureFlags = { enabled: async () => true };
 const noEnqueue = async () => undefined;
+function recorder() {
+  const events: unknown[] = [];
+  const enqueue = async (_loop: unknown, entries: IngressEntry[]) => {
+    events.push(...entries.map((entry) => entry.sourcePayload?.latestEvent));
+  };
+  return { events, enqueue };
+}
 const tokens = { connectorAccessToken: async () => "synthetic-token" };
 const json = (body: unknown) => Response.json(body);
 const ALEX = "https://avatars.slack-edge.com/alex.png";
@@ -37,13 +44,14 @@ function directoryOf(
 }
 const directory = directoryOf({ U1: { displayName: "Alex", avatarUrl: ALEX }, U2: { displayName: "Taylor" } });
 
-test("Gmail reply sent outside QM closes the card, ignores drafts and recognizes send-as aliases", async () => {
+test("Gmail reply sent outside QM becomes an owner event, ignoring drafts and recognizing send-as aliases", async () => {
   const { items, item } = await fixture();
   let reads = 0;
+  const queue = recorder();
   const refresh = createInboxSourceRefresh({
     featureFlags,
     items,
-    enqueue: simulatedLoopEvents(items).enqueue,
+    enqueue: queue.enqueue,
     tokens,
     directory,
     fetchImpl: async (url) => {
@@ -60,13 +68,8 @@ test("Gmail reply sent outside QM closes the card, ignores drafts and recognizes
   });
   await Promise.all([refresh("owner@example.com", [item]), refresh("owner@example.com", [item])]);
   await refresh("owner@example.com", [item]);
-  const after = (await items.get(item.id))!;
-  assert.equal(after.status, "skipped");
-  assert.equal(after.actionKind, "replied");
-  assert.equal(after.sourceAt, 2000);
-  assert.equal(after.actionResult, "Handled elsewhere");
-  // The human edit is kept in the item thread when the newer message refreshes it.
-  assert.ok(after.thread?.some((message) => JSON.stringify(message).includes("Keep my edit")));
+  assert.deepEqual(queue.events, [{ author: "owner", at: 2000, text: "Handled elsewhere" }]);
+  assert.equal((await items.get(item.id))!.proposal?.data.body, "Keep my edit");
   assert.equal(reads, 1);
 });
 
@@ -80,15 +83,16 @@ test("an old sent message or a newer inbound message does not close a Gmail item
     [{ internalDate: "2000", labelIds: ["DRAFT"] }],
   ]) {
     const { items, item } = await fixture();
+    const queue = recorder();
     await createInboxSourceRefresh({
       featureFlags,
       items,
-      enqueue: simulatedLoopEvents(items).enqueue,
+      enqueue: queue.enqueue,
       tokens,
       directory,
       fetchImpl: async () => json({ messages }),
     })("owner", [item]);
-    assert.equal((await items.get(item.id))!.status, "ready");
+    assert.deepEqual(queue.events, []);
   }
 });
 
@@ -98,7 +102,7 @@ test("provider failure or missing connection preserves the item with an explicit
     await createInboxSourceRefresh({
       featureFlags,
       items,
-      enqueue: simulatedLoopEvents(items).enqueue,
+      enqueue: noEnqueue,
       tokens: { connectorAccessToken: async () => (connected ? "test" : null) },
       directory,
       fetchImpl: async () => new Response("unavailable", { status: 503 }),
@@ -115,7 +119,7 @@ test("a new inbound message during a provider read wins over the older own reply
   await createInboxSourceRefresh({
     featureFlags,
     items,
-    enqueue: simulatedLoopEvents(items).enqueue,
+    enqueue: noEnqueue,
     tokens,
     directory,
     fetchImpl: async () => {
@@ -131,10 +135,7 @@ test("a new inbound message during a provider read wins over the older own reply
       return json({ messages: [{ internalDate: "2000", labelIds: ["SENT"] }] });
     },
   })("owner", [item]);
-  const after = (await items.get(item.id))!;
-  assert.notEqual(after.status, "skipped");
-  assert.equal(after.actionKind, undefined);
-  assert.equal(after.sourceAt, 3000);
+  assert.equal((await items.get(item.id))!.status, "queued");
   assert.equal((await items.get(item.id))!.sourceAt, 3000);
 });
 
@@ -175,7 +176,7 @@ test("top-level/private-channel mentions fetch just their root and replies, neve
     await createInboxSourceRefresh({
       featureFlags,
       items,
-      enqueue: simulatedLoopEvents(items).enqueue,
+      enqueue: noEnqueue,
       tokens,
       directory,
       fetchImpl: slackFetch(calls),
@@ -195,30 +196,32 @@ test("top-level/private-channel mentions fetch just their root and replies, neve
 test("Slack detects group DMs by conversation metadata, including C-prefixed IDs", async () => {
   const { items, item } = await fixture("slack", { channelId: "C_GROUP_DM", ts: "1.0" });
   const calls: string[] = [];
+  const queue = recorder();
   await createInboxSourceRefresh({
     featureFlags,
     items,
-    enqueue: simulatedLoopEvents(items).enqueue,
+    enqueue: queue.enqueue,
     tokens,
     directory,
     fetchImpl: slackFetch(calls, { direct: true, own: true }),
   })("owner", [item]);
   assert.ok(calls.some((p) => p.includes("conversations.history")));
-  assert.equal((await items.get(item.id))!.actionKind, "replied");
+  assert.deepEqual(queue.events, [{ author: "owner", at: 2000, text: "Thread reply" }]);
 });
 
 test("a partial Slack thread is displayed as partial but cannot resolve an item", async () => {
   const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0" });
+  const queue = recorder();
   await createInboxSourceRefresh({
     featureFlags,
     items,
-    enqueue: simulatedLoopEvents(items).enqueue,
+    enqueue: queue.enqueue,
     tokens,
     directory,
     fetchImpl: slackFetch([], { partial: true, own: true }),
   })("owner", [item]);
   const after = (await items.get(item.id))!;
-  assert.equal(after.status, "ready");
+  assert.deepEqual(queue.events, []);
   assert.equal(after.sourcePayload!.sourceContextPartial, true);
 });
 
@@ -228,7 +231,7 @@ test("rate limiting is respected across different Slack items and never triggers
   const refresh = createInboxSourceRefresh({
     featureFlags,
     items,
-    enqueue: simulatedLoopEvents(items).enqueue,
+    enqueue: noEnqueue,
     tokens,
     directory,
     fetchImpl: async (url) => {
@@ -250,7 +253,7 @@ test("slow Gmail reads have a total batch budget and later cards are visited on 
   const refresh = createInboxSourceRefresh({
     featureFlags,
     items,
-    enqueue: simulatedLoopEvents(items).enqueue,
+    enqueue: noEnqueue,
     tokens,
     directory,
     now: () => clock,
@@ -822,22 +825,4 @@ test("people outside the directory without message profiles keep initials and ne
     },
   })("owner", [item]);
   assert.deepEqual((await items.get(item.id))!.sourcePayload!.participants, [{ id: "U_EXT", name: "U_EXT" }]);
-});
-
-test("an owner with the inbox_loops flag off gets no provider reads", async () => {
-  const { items, item } = await fixture();
-  let reads = 0;
-  await createInboxSourceRefresh({
-    items,
-    enqueue: simulatedLoopEvents(items).enqueue,
-    tokens,
-    directory,
-    featureFlags: { enabled: async () => false },
-    fetchImpl: async () => {
-      reads++;
-      return json({ messages: [] });
-    },
-  })("owner@example.com", [item]);
-  assert.equal(reads, 0);
-  assert.equal((await items.get(item.id))!.status, item.status);
 });

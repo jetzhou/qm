@@ -1,5 +1,12 @@
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
-import { renderSourceInboxTask, renderInboxSyncTask, withInboxOwnerRules } from "./inbox-loop.ts";
+import {
+  renderSourceInboxTask,
+  renderInboxSyncTask,
+  withInboxOwnerRules,
+  isReplyLoop,
+  parseResolution,
+  REPLY_DECISION,
+} from "./inbox-loop.ts";
 import { cronTriggerAuthority } from "../cron/authority.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import { boundLoopCron } from "./authority.ts";
@@ -394,26 +401,6 @@ function triagePrompt(loop: Loop, open: LoopItem[], pending: LoopItem[]): string
   ].join("\n");
 }
 
-function isReplyLoop(loop: Loop, item: LoopItem): boolean {
-  return Boolean(adapterForItem(item)) && loop.shipActions.length === 1 && loop.shipActions[0]?.action === "send";
-}
-
-// Reply Loops are kept consistent with Gmail and Slack by events. Each event lands
-// here, so this stage alone decides whether the person still owes a reply.
-const REPLY_DECISION = [
-  'First decide whether the person still owes a reply in this conversation. sourcePayload.latestEvent, when present, is the newest message an event saw: author "owner" means the person wrote it themselves (in Gmail, Slack, or from QM).',
-  'If the person has already answered and nothing newer asks anything of them, end with {"resolution":{"kind":"replied","reason":"<one line>"}}. If the conversation needs nothing from them (closed out, a plain thanks, someone else answered, machine noise), end with {"resolution":{"kind":"no_reply_needed","reason":"<one line>"}}. Re-read the conversation from the source when the payload is not enough to tell. When in doubt, draft a reply.',
-].join("\n");
-
-function parseResolution(parsed: unknown): { kind: "replied" | "no_reply_needed"; reason: string } | null {
-  if (!parsed || typeof parsed !== "object" || !("resolution" in parsed)) return null;
-  const raw = (parsed as { resolution?: unknown }).resolution;
-  if (!raw || typeof raw !== "object") return null;
-  const { kind, reason } = raw as { kind?: unknown; reason?: unknown };
-  if (kind !== "replied" && kind !== "no_reply_needed") return null;
-  return { kind, reason: typeof reason === "string" ? reason.slice(0, 500) : "" };
-}
-
 function workPrompt(loop: Loop, item: LoopItem, guidance?: string, similar: LoopItem[] = []): string {
   const data = JSON.stringify({
     sourceKey: promptText(item.sourceKey),
@@ -753,7 +740,6 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
             const parsed = fencedJson(outcome.reply ?? "");
             const resolution = isReplyLoop(loop, item) ? parseResolution(parsed) : null;
             if (resolution) {
-              // Releases the claim, so the runner skips capture and judging for this item.
               await deps.items.recordAction(item.id, {
                 kind: resolution.kind === "replied" ? "replied" : "dismissed",
                 outcome: "dismissed",

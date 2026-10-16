@@ -1,6 +1,5 @@
 import { migrateInbox } from "../../loops/inbox-migration.ts";
 import { canonicalPerson } from "../../directory/person.ts";
-import { labelSlackMentions } from "./slack-mentions.ts";
 import { scopeId, type Loop } from "../../types.ts";
 import { ensureDefaultInboxLoops, findInboxLoop } from "../../loops/inbox-loop.ts";
 import {
@@ -77,20 +76,13 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   if (itemId) {
     const item = await deps.items.get(itemId);
     if (!item || !selectedIds.includes(item.loopId)) return sendJson(ctx.res, 404, { error: "not_found" });
-    return sendJson(
-      ctx.res,
-      200,
-      await labelSlackMentions(
-        {
-          item: ledgerItemView(
-            item,
-            selected.find((loop) => loop.id === item.loopId)!,
-          ),
-          outputs: (await deps.outputs.byItem(item.id)).filter((output) => output.loopId === item.loopId),
-        },
-        ctx.deps.directory,
+    return sendJson(ctx.res, 200, {
+      item: ledgerItemView(
+        item,
+        selected.find((loop) => loop.id === item.loopId)!,
       ),
-    );
+      outputs: (await deps.outputs.byItem(item.id)).filter((output) => output.loopId === item.loopId),
+    });
   }
   const requestedFilter = ctx.url.searchParams.get("filter");
   if (requestedFilter !== null && !["all", "human", "triaged"].includes(requestedFilter))
@@ -190,11 +182,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
         state: loop.state,
         cronId: loop.cronId,
         syncCron: loop.cronId ? cronSummary((await deps.crons?.get(loop.cronId)) ?? null) : null,
-        // The internal conversation queue only reacts to known items; it does not find new work.
-        ingestionActive:
-          (await ctx.deps.loopIngress?.list(loop.id))?.some(
-            (source) => source.enabled && source.kind !== "conversation",
-          ) ?? false,
+        ingestionActive: (await ctx.deps.loopIngress?.list(loop.id))?.some((source) => source.enabled) ?? false,
         source: loop.surface?.startsWith("inbox:") ? loop.sources?.[0] : undefined,
         prioritize: prioritizes(loop),
         consolidate: consolidates(loop),
@@ -211,20 +199,17 @@ async function inbox(ctx: ApiCtx): Promise<void> {
     migrationPending: !migrated,
     filter: inboxFilter,
     total: [...counts.values()].reduce((sum, count) => sum + count, 0),
-    items: await labelSlackMentions(
-      page.map((item) =>
-        ledgerItemView(
-          {
-            ...item,
-            sourcePayload: item.inboxPreview ?? {
-              title: item.sourceSummary ?? "Review item",
-              snippet: item.parkedReason ?? item.sourceSummary ?? "",
-            },
+    items: page.map((item) =>
+      ledgerItemView(
+        {
+          ...item,
+          sourcePayload: item.inboxPreview ?? {
+            title: item.sourceSummary ?? "Review item",
+            snippet: item.parkedReason ?? item.sourceSummary ?? "",
           },
-          loopsById.get(item.loopId)!,
-        ),
+        },
+        loopsById.get(item.loopId)!,
       ),
-      ctx.deps.directory,
     ),
     nextCursor:
       feed.length > page.length && last ? Buffer.from(JSON.stringify(keys.get(last.id))).toString("base64url") : null,

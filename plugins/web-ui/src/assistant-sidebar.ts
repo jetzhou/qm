@@ -15,23 +15,27 @@ export type AssistantSidebarContext =
   | { kind: "thread"; source: string; hasDraft: boolean; sent: boolean; resolved: boolean }
   | { kind: "inbox"; hasEmail: boolean; hasSlack: boolean; hasDrafts: boolean };
 
-export function assistantPrompts(context: AssistantSidebarContext): readonly string[] {
-  if (context.kind === "inbox") {
-    const prompts = [context.hasEmail && !context.hasSlack ? "Summarize my recent emails" : "Summarize my inbox"];
-    prompts.push(context.hasDrafts ? "Which drafts should I review first?" : "What needs my attention?");
-    return prompts;
-  }
-  if (context.sent) return ["Summarize this email", "What should I follow up on?"];
-  if (context.source === "generic") return ["Explain the proposal", "What needs my input?"];
-  if (context.resolved) return ["Summarize this thread", "Does this still need a reply?"];
-  if (context.hasDraft) return ["Make it shorter", "Make it more friendly", "Remove the salutations"];
-  return ["Summarize this thread", "Help me write a reply"];
+interface AssistantPrompt {
+  prompt: string;
+  icon: string;
 }
 
-function promptIcon(prompt: string): string {
-  if (/^(Summarize|Explain)/.test(prompt)) return "📝";
-  if (/^(Make|Remove|Help me write)/.test(prompt)) return "✏️";
-  return "👀";
+const read = (prompt: string): AssistantPrompt => ({ prompt, icon: "📝" });
+const write = (prompt: string): AssistantPrompt => ({ prompt, icon: "✏️" });
+const ask = (prompt: string): AssistantPrompt => ({ prompt, icon: "👀" });
+
+export function assistantPrompts(context: AssistantSidebarContext): readonly AssistantPrompt[] {
+  if (context.kind === "inbox")
+    return [
+      read(context.hasEmail && !context.hasSlack ? "Summarize my recent emails" : "Summarize my inbox"),
+      ask(context.hasDrafts ? "Which drafts should I review first?" : "What needs my attention?"),
+    ];
+  if (context.sent) return [read("Summarize this email"), ask("What should I follow up on?")];
+  if (context.source === "generic") return [read("Explain the proposal"), ask("What needs my input?")];
+  if (context.resolved) return [read("Summarize this thread"), ask("Does this still need a reply?")];
+  if (context.hasDraft)
+    return [write("Make it shorter"), write("Make it more friendly"), write("Remove the salutations")];
+  return [read("Summarize this thread"), write("Help me write a reply")];
 }
 
 export function assistantSuggestions(
@@ -42,7 +46,7 @@ export function assistantSuggestions(
   let origin: HTMLElement | null = null;
   return html`<div class="assistant-suggestions" ${ref((el) => (origin = (el as HTMLElement | undefined) ?? null))}>
     ${suggestedActivities(
-      assistantPrompts(context).map((prompt) => ({ id: prompt, title: prompt, prompt, icon: promptIcon(prompt) })),
+      assistantPrompts(context).map(({ prompt, icon }) => ({ id: prompt, title: prompt, prompt, icon })),
       (activity) => onPrompt(activity.prompt, origin),
       busy,
     )}
@@ -64,7 +68,6 @@ function messageMeta(text: string, at?: number): TemplateResult {
   </div>`;
 }
 
-/** One transcript row, in the same markup the main chat renders (user bubble / assistant body). */
 export function assistantMessage(options: {
   role: "human" | "agent" | "system";
   text: string;
@@ -83,7 +86,6 @@ export function assistantMessage(options: {
   </article>`;
 }
 
-/** The main chat shell in pane mode, fed by a ledger thread instead of a live session. */
 export function assistantSidebar(options: {
   context: AssistantSidebarContext;
   messages: Content;

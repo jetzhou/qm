@@ -3,7 +3,6 @@ import type { Cron, Loop, LoopItem, LoopSourcePayload } from "../../types.ts";
 import { canonicalJson } from "../../util/objects.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
-import { labelSlackMentions } from "./slack-mentions.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import {
@@ -125,14 +124,7 @@ async function listItems(ctx: ApiCtx): Promise<void> {
     const state = ledgerState(item);
     counts[state] = (counts[state] ?? 0) + 1;
   }
-  sendJson(
-    ctx.res,
-    200,
-    await labelSlackMentions(
-      { loop, items: items.map((item) => ledgerItemView(item, loop, !!ctx.capability)), counts },
-      ctx.deps.directory,
-    ),
-  );
+  sendJson(ctx.res, 200, { loop, items: items.map((item) => ledgerItemView(item, loop, !!ctx.capability)), counts });
 }
 
 async function ingestItems(ctx: ApiCtx): Promise<void> {
@@ -275,23 +267,10 @@ async function getItem(ctx: ApiCtx): Promise<void> {
     loaded.loop.owner === loaded.actorId
   )
     await ctx.deps.inboxSourceRefresh?.(loaded.loop.owner, [loaded.item]);
-  sendJson(
-    ctx.res,
-    200,
-    await labelSlackMentions(
-      {
-        item: ledgerItemView(
-          (await loaded.deps.items.get(loaded.item.id)) ?? loaded.item,
-          loaded.loop,
-          !!ctx.capability,
-        ),
-        outputs: (await loaded.deps.outputs.byItem(loaded.item.id)).filter(
-          (output) => output.loopId === loaded.loop.id,
-        ),
-      },
-      ctx.deps.directory,
-    ),
-  );
+  sendJson(ctx.res, 200, {
+    item: ledgerItemView((await loaded.deps.items.get(loaded.item.id)) ?? loaded.item, loaded.loop, !!ctx.capability),
+    outputs: (await loaded.deps.outputs.byItem(loaded.item.id)).filter((output) => output.loopId === loaded.loop.id),
+  });
 }
 
 function sameProposalData(item: LoopItem, data: LoopSourcePayload): boolean {
@@ -329,11 +308,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     if (!data) return sendJson(ctx.res, 400, { error: "bad_request", message: "proposal is not valid for this item" });
     if (expectedAt !== undefined && item.proposal && item.proposal.at !== expectedAt) return draftChanged();
     if (sameProposalData(item, data))
-      return sendJson(
-        ctx.res,
-        200,
-        await labelSlackMentions({ item: ledgerItemView(item, loop, !!ctx.capability) }, ctx.deps.directory),
-      );
+      return sendJson(ctx.res, 200, { item: ledgerItemView(item, loop, !!ctx.capability) });
     const next = await deps.items.setProposal(
       item.id,
       { data, by: proposalAuthor },
@@ -341,22 +316,14 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     );
     if (!next && expectedAt !== undefined) return draftChanged();
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is already actioned" });
-    return sendJson(
-      ctx.res,
-      200,
-      await labelSlackMentions({ item: ledgerItemView(next, loop, !!ctx.capability) }, ctx.deps.directory),
-    );
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
   }
 
   if (kind === "dismiss") {
     const next = await deps.items.recordAction(item.id, { kind, outcome: "dismissed" });
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is already actioned" });
     if (args.group === true && !ctx.capability) await settleGroup(deps.items, next);
-    return sendJson(
-      ctx.res,
-      200,
-      await labelSlackMentions({ item: ledgerItemView(next, loop, !!ctx.capability) }, ctx.deps.directory),
-    );
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
   }
 
   if (kind === "prioritize" || kind === "ungroup") {
@@ -370,32 +337,20 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
         ? await deps.items.setTriage(item.id, { priority }, "human")
         : await removeFromGroup(deps.items, item);
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is already actioned" });
-    return sendJson(
-      ctx.res,
-      200,
-      await labelSlackMentions({ item: ledgerItemView(next, loop, !!ctx.capability) }, ctx.deps.directory),
-    );
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
   }
 
   if (kind === "reply") {
     if (!ctx.actor?.p || item.sourcePayload?.sentChat !== true) return sendJson(ctx.res, 403, { error: "forbidden" });
     const next = await deps.items.reopen(item.id, { sentReply: true });
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "a reply is already being drafted" });
-    return sendJson(
-      ctx.res,
-      200,
-      await labelSlackMentions({ item: ledgerItemView(next, loop, !!ctx.capability) }, ctx.deps.directory),
-    );
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
   }
 
   if (kind === "reopen") {
     const next = await deps.items.reopen(item.id);
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is not dismissed" });
-    return sendJson(
-      ctx.res,
-      200,
-      await labelSlackMentions({ item: ledgerItemView(next, loop, !!ctx.capability) }, ctx.deps.directory),
-    );
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
   }
 
   if (kind === "replied") {
@@ -409,11 +364,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     if (!next) {
       return sendJson(ctx.res, 409, { error: "conflict", message: "this item was already actioned from here" });
     }
-    return sendJson(
-      ctx.res,
-      200,
-      await labelSlackMentions({ item: ledgerItemView(next, loop, !!ctx.capability) }, ctx.deps.directory),
-    );
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
   }
 
   if (kind === "send" && item.status !== "ready") {
@@ -466,17 +417,14 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
       }
       if (result.payloadPatch) item = (await deps.items.annotate(item.id, result.payloadPatch)) ?? item;
       if (result.resolves === false)
-        return sendJson(
-          ctx.res,
-          200,
-          await labelSlackMentions({ item: ledgerItemView(item, loop, !!ctx.capability) }, ctx.deps.directory),
-        );
-      const next = await deps.items.recordAction(item.id, { kind, outcome: "actioned", result: result.result });
-      return sendJson(
-        ctx.res,
-        200,
-        await labelSlackMentions({ item: ledgerItemView(next ?? item, loop, !!ctx.capability) }, ctx.deps.directory),
-      );
+        return sendJson(ctx.res, 200, { item: ledgerItemView(item, loop, !!ctx.capability) });
+      const next = await deps.items.recordAction(item.id, {
+        kind,
+        outcome: "actioned",
+        result: result.result,
+        sourceAt: Math.max(Date.now(), (item.sourceAt ?? 0) + 1),
+      });
+      return sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, loop, !!ctx.capability) });
     } finally {
       await deps.items.releaseDecision(item.id, decisionToken);
     }
@@ -494,11 +442,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     outcome: "actioned",
     ...(turn.reply ? { result: turn.reply } : {}),
   });
-  sendJson(
-    ctx.res,
-    200,
-    await labelSlackMentions({ item: ledgerItemView(next ?? item, loop, !!ctx.capability) }, ctx.deps.directory),
-  );
+  sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, loop, !!ctx.capability) });
 }
 
 const followUpOptionsSchema = z.object({
@@ -550,11 +494,7 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
       loaded.actorId,
       options,
     );
-    sendJson(
-      ctx.res,
-      200,
-      await labelSlackMentions({ item: ledgerItemView(next ?? item, loop, !!ctx.capability) }, ctx.deps.directory),
-    );
+    sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, loop, !!ctx.capability) });
   } catch (e) {
     sendJson(ctx.res, 502, { error: "followup_failed", message: errMessage(e) });
   }
@@ -656,11 +596,7 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
   item = (await deps.items.annotate(id, payload, { summary: text("subject", 300) })) ?? item;
   if (item.actionKind === "sent") item = (await deps.items.reopen(id, { sentReply: true })) ?? item;
   ctx.res.setHeader("Cache-Control", "no-store");
-  sendJson(
-    ctx.res,
-    200,
-    await labelSlackMentions({ item: ledgerItemView(item, loop, !!ctx.capability) }, ctx.deps.directory),
-  );
+  sendJson(ctx.res, 200, { item: ledgerItemView(item, loop, !!ctx.capability) });
 }
 
 async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {

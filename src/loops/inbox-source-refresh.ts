@@ -5,7 +5,7 @@ import type { ErrorLog } from "../admin/error-log.ts";
 import { redactSecrets } from "../harness/redact-secrets.ts";
 import { errMessage } from "../util/errors.ts";
 import type { LoopItemLedger } from "./item-ledger.ts";
-import type { IngressEntry } from "./ingress.ts";
+import { conversationEvent, type IngressEntry } from "./ingress.ts";
 import { isResolved } from "./ledger-view.ts";
 import { isObj, tokenFor, type ConnectorTokenSource } from "./sources/adapter.ts";
 import { normalizeSlackApiUrl } from "../slack/config.ts";
@@ -17,8 +17,7 @@ interface RefreshDeps {
   directory: Pick<DirectoryStore, "getBySlackId">;
   featureFlags: Pick<FeatureFlagStore, "enabled">;
   errors?: ErrorLog;
-  /** The Loop's event queue; an observed owner reply is judged by the work stage there. */
-  enqueue: (loop: { id: string; owner: string }, eventKey: string, entries: IngressEntry[]) => Promise<unknown>;
+  enqueue: (loop: { id: string; owner: string }, entries: IngressEntry[]) => Promise<unknown>;
   fetchImpl?: typeof fetch;
   slackApiUrl?: string;
   now?: () => number;
@@ -179,20 +178,9 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     );
   }
 
-  // The owner's newest message is an event like any other: queue it for the Loop's
-  // work stage instead of resolving the item here.
   async function ownerReplied(owner: string, item: LoopItem, at: number, text: string): Promise<void> {
     if (!Number.isFinite(at) || at <= (item.sourceAt ?? 0)) return;
-    await deps.enqueue({ id: item.loopId, owner }, `refresh:${item.id}:${at}`, [
-      {
-        loopId: item.loopId,
-        dedupeKey: item.sourceKey,
-        ...(item.source !== undefined ? { source: item.source } : {}),
-        sourceAt: at,
-        merge: true,
-        sourcePayload: { latestEvent: { author: "owner", at, ...(text ? { text: text.slice(0, 2_000) } : {}) } },
-      },
-    ]);
+    await deps.enqueue({ id: item.loopId, owner }, [conversationEvent(item, { author: "owner", at, text })]);
   }
 
   async function refresh(owner: string, item: LoopItem): Promise<void> {

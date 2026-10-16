@@ -1,14 +1,26 @@
+import { z } from "zod";
 import { parseScopeId, scopeId } from "../../types.ts";
 import { sendJson, readRawBody, PayloadTooLargeError } from "../http.ts";
 import { loadAdministrable } from "./loops.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
-import type { LoopIngress, IngressSetup, IngressEntry } from "../../loops/ingress.ts";
+import { conversationEvent, type LoopIngress, type IngressSetup } from "../../loops/ingress.ts";
 import { errMessage } from "../../util/errors.ts";
-import { hashId } from "../../util/crypto.ts";
 
-const MAX_EVENTS = 20;
-const MAX_EVENT_TEXT = 2_000;
+const eventsSchema = z.object({
+  events: z
+    .array(
+      z.object({
+        sourceKey: z.string().min(1),
+        author: z.enum(["owner", "other"]),
+        at: z.number().finite().positive(),
+        text: z.string().optional(),
+        from: z.string().optional(),
+      }),
+    )
+    .min(1)
+    .max(20),
+});
 
 function view(source: Omit<LoopIngress, "secret">, publicUrl?: string) {
   const { secret: _secret, ...safe } = source as LoopIngress;
@@ -26,7 +38,6 @@ async function list(ctx: ApiCtx) {
   return sendJson(ctx.res, 200, {
     sources: (await ingress.list(loaded.loop.id)).map((source) => view(source, ctx.deps.publicUrl)),
     gmailAvailable: ingress.gmailAvailable,
-    ...(ingress.gmailMode ? { gmailMode: ingress.gmailMode } : {}),
   });
 }
 
@@ -70,11 +81,6 @@ async function change(ctx: ApiCtx) {
   }
 }
 
-/**
- * Report new messages in conversations already on the Loop ledger (for example a
- * reply the scheduled sync noticed). Events take the same path as Gmail and Slack
- * events: queued, merged into the item, then judged by the Loop's work stage.
- */
 async function events(ctx: ApiCtx) {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
@@ -83,7 +89,6 @@ async function events(ctx: ApiCtx) {
   const ingress = ctx.deps.loopIngress;
   if (!ingress) return sendJson(ctx.res, 404, { error: "unavailable" });
   if (loaded.loop.state === "archived") return sendJson(ctx.res, 409, { error: "archived" });
-  // An agent may report events only from the owner's own scope, like ledger reads.
   if (
     ctx.capability &&
     parseScopeId(loaded.loop.ownerScopeId).kind === "personal" &&
@@ -93,47 +98,16 @@ async function events(ctx: ApiCtx) {
       error: "forbidden",
       message: "personal loop events come only from its owner's scope",
     });
-  const raw = isObj(ctx.body) ? ctx.body.events : undefined;
-  if (!Array.isArray(raw) || !raw.length || raw.length > MAX_EVENTS)
-    return sendJson(ctx.res, 400, { error: "bad_request", message: `events must be 1-${MAX_EVENTS} items` });
-  const entries: IngressEntry[] = [];
-  for (const event of raw) {
-    if (
-      !isObj(event) ||
-      typeof event.sourceKey !== "string" ||
-      !event.sourceKey ||
-      (event.author !== "owner" && event.author !== "other") ||
-      typeof event.at !== "number" ||
-      !Number.isFinite(event.at) ||
-      event.at <= 0 ||
-      (event.text !== undefined && typeof event.text !== "string") ||
-      (event.from !== undefined && typeof event.from !== "string")
-    )
-      return sendJson(ctx.res, 400, {
-        error: "bad_request",
-        message: 'each event needs {sourceKey, author: "owner"|"other", at (ms), text?, from?}',
-      });
-    const text = typeof event.text === "string" ? event.text.trim().slice(0, MAX_EVENT_TEXT) : undefined;
-    const other = event.author === "other";
-    entries.push({
-      loopId: loaded.loop.id,
-      dedupeKey: event.sourceKey,
-      sourceAt: event.at,
-      merge: true,
-      ...(other && text ? { summary: text.slice(0, 200) } : {}),
-      sourcePayload: {
-        latestEvent: {
-          author: event.author,
-          at: event.at,
-          ...(text ? { text } : {}),
-          ...(other && typeof event.from === "string" ? { from: event.from.slice(0, 300) } : {}),
-        },
-        ...(other ? { receivedAt: event.at, ...(text ? { snippet: text } : {}) } : {}),
-      },
+  const parsed = eventsSchema.safeParse(ctx.body);
+  if (!parsed.success)
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: 'body needs {events: 1-20 of {sourceKey, author: "owner"|"other", at (ms), text?, from?}}',
     });
-  }
-  const key = hashId(["api", ...entries.map((entry) => `${entry.dedupeKey}:${entry.sourceAt}`)]);
-  const queued = await ingress.enqueueConversation(loaded.loop, key, entries);
+  const entries = parsed.data.events.map((event) =>
+    conversationEvent({ loopId: loaded.loop.id, sourceKey: event.sourceKey }, event),
+  );
+  const queued = await ingress.enqueueConversation(loaded.loop, entries);
   return sendJson(
     ctx.res,
     queued ? 202 : 409,
@@ -164,7 +138,6 @@ export const loopIngressRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/loops/:id/events", auth: "either", handle: events },
 ];
 
-/** Slack Events API for the connector app (user-token events), see slack-user-events.ts. */
 async function slackUserEvents(ctx: BaseCtx) {
   if (!ctx.deps.slackUserEvents) {
     ctx.req.resume();

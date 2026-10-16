@@ -31,15 +31,8 @@ export interface LoopIngress {
   nextWorkAt?: number;
 }
 
-/**
- * An entry bound for the ledger. `merge` entries describe a new message in a
- * conversation that is already on the ledger (the owner's own reply, or a
- * follow-up): they layer onto the existing item instead of replacing it, and are
- * dropped when no such item exists, so an event never invents a conversation.
- */
 export type IngressEntry = IngestEntryInput & { merge?: boolean };
 
-/** The newest message an event saw; the work stage decides what it means. */
 export interface LatestEvent {
   author: "owner" | "other";
   at: number;
@@ -47,7 +40,27 @@ export interface LatestEvent {
   from?: string;
 }
 
-/** The ledger entry for an ingress entry, or null when a merge has nothing to merge into. */
+export const EVENT_TEXT_CHARS = 2_000;
+
+export function conversationEvent(
+  item: { loopId: string; sourceKey: string; source?: string | undefined },
+  event: LatestEvent,
+): IngressEntry {
+  const text = event.text?.trim().slice(0, EVENT_TEXT_CHARS);
+  const from = event.author === "other" ? event.from?.slice(0, 300) : undefined;
+  return {
+    loopId: item.loopId,
+    dedupeKey: item.sourceKey,
+    ...(item.source !== undefined ? { source: item.source } : {}),
+    sourceAt: event.at,
+    merge: true,
+    sourcePayload: {
+      latestEvent: { author: event.author, at: event.at, ...(text ? { text } : {}), ...(from ? { from } : {}) },
+      ...(event.author === "other" ? { receivedAt: event.at } : {}),
+    },
+  };
+}
+
 export function ledgerEntry(raw: IngressEntry, existing: LoopItem | undefined): IngestEntryInput | null {
   const { merge, ...base } = raw;
   if (!merge) return base;
@@ -83,10 +96,7 @@ export interface LoopIngressDeps {
   fire: Pick<LoopFireService, "fire">;
   lock: AdvisoryLock;
   gmailConfig?: GmailPushConfig;
-  /** Present with or without Pub/Sub; without it Gmail sources poll their history cursor. */
   gmailClient?: ReturnType<typeof createGmailPushClient>;
-  /** Poll interval for Gmail sources when Pub/Sub is not configured. */
-  gmailPollMs?: number;
   verifyGoogle?: typeof verifyGmailPush;
 }
 
@@ -103,7 +113,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
     source: LoopIngress,
     deliveryId: string,
     payload: Pick<IngressDelivery, "entries" | "historyId">,
-  ): Promise<void> {
+  ) {
     const id = hashId([source.id, deliveryId]);
     await deps.deliveries.putIfAbsent(id, {
       id,
@@ -214,7 +224,6 @@ export function createLoopIngress(deps: LoopIngressDeps) {
     });
   }
 
-  /** The internal queue for conversation events on one Loop, created on first use. */
   async function conversationSource(loop: Pick<Loop, "id" | "owner">): Promise<LoopIngress> {
     const find = async () =>
       (await deps.sources.select({ where: { field: "loopId", anyOfFold: [loop.id] } })).find(
@@ -238,33 +247,20 @@ export function createLoopIngress(deps: LoopIngressDeps) {
     });
   }
 
-  function gmailMode(): "push" | "poll" | undefined {
-    if (!deps.gmailClient) return undefined;
-    return deps.gmailConfig ? "push" : "poll";
-  }
-
   return {
     gmailAvailable: Boolean(deps.gmailClient),
-    gmailMode: gmailMode(),
-    /**
-     * Queue conversation events (Slack messages QM saw, Gmail sent mail, source
-     * refreshes) for a Loop. Every event goes through the Loop's own work stage,
-     * which decides whether the item still needs a reply; nothing here resolves it.
-     */
-    async enqueueConversation(
-      loop: Pick<Loop, "id" | "owner">,
-      eventKey: string,
-      entries: IngressEntry[],
-    ): Promise<boolean> {
+    async enqueueConversation(loop: Pick<Loop, "id" | "owner">, entries: IngressEntry[]): Promise<boolean> {
       if (!entries.length || !(await deps.enabledFor(loop.owner))) return false;
       const source = await conversationSource(loop);
       if (!source.enabled) return false;
-      await enqueue(source, eventKey, { entries });
+      await enqueue(source, hashId(entries.map((entry) => `${entry.dedupeKey}:${entry.sourceAt}`)), { entries });
       void process(source.id).catch((error) => swallow("Loop conversation event", error));
       return true;
     },
     async list(loopId: string) {
-      return await deps.sources.select({ omit: ["secret"], where: { field: "loopId", anyOfFold: [loopId] } });
+      return (await deps.sources.select({ omit: ["secret"], where: { field: "loopId", anyOfFold: [loopId] } })).filter(
+        (source) => source.kind !== "conversation",
+      );
     },
     async create(loop: Loop, input: IngressSetup): Promise<LoopIngress> {
       if (!(await deps.enabledFor(loop.owner))) throw new Error("Event ingestion is not enabled for this owner");
@@ -464,8 +460,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
           });
         }
         if (source.kind === "gmail" && (source.nextReconcileAt ?? 0) <= Date.now()) {
-          // Pub/Sub pushes changes and this only reconciles; without it, this is the poll.
-          const every = deps.gmailConfig ? 600_000 : Math.max(15_000, deps.gmailPollMs ?? 60_000);
+          const every = deps.gmailConfig ? 600_000 : 60_000;
           await enqueue(source, `reconcile:${Math.floor(Date.now() / every)}`, {});
           await deps.sources.merge(source.id, { nextReconcileAt: Date.now() + every });
         }

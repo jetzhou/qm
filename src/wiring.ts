@@ -2358,8 +2358,7 @@ export function buildApp(
   const inboxRealtime = createInboxRealtime({
     loops: loopStore,
     items: loopItems,
-    enqueue: (loop, eventKey, entries) => loopIngress.enqueueConversation(loop, eventKey, entries),
-    enabledFor: (owner) => featureFlags.enabled("inbox_loops", scopeId("personal", owner)),
+    enqueue: (loop, entries) => loopIngress.enqueueConversation(loop, entries),
   });
   const keychainApprovals = keychain
     ? createKeychainApprovals({
@@ -2597,17 +2596,15 @@ export function buildApp(
     outputs: loopOutputs,
     fire: loopFire,
     lock: advisoryLock,
-    // Without Pub/Sub the Gmail client polls the same history cursor.
     ...(keychain ? { gmailClient: createGmailPushClient(keychain, config.gmailPubSub) } : {}),
     ...(config.gmailPubSub ? { gmailConfig: config.gmailPubSub } : {}),
   });
   const slackUserEvents = createSlackUserEvents({
     signingSecret: () => secretSource.get("SLACK_OAUTH_SIGNING_SECRET"),
-    appToken: () => secretSource.get("SLACK_OAUTH_APP_TOKEN"),
     loops: loopStore,
     tokens: keychain ?? { connectorAccessToken: async () => null },
+    slackClient: slackUserClientFactory(config.slack?.apiUrl),
     onConversationEvent: (event, opts) => inboxRealtime.onConversationEvent(event, opts),
-    ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
   });
   const loops: LoopServiceDeps = {
     lock: advisoryLock,
@@ -3218,7 +3215,7 @@ export function serverDeps(
             featureFlags: built.featureFlags,
             items: built.loops.items,
             errors: built.errors,
-            enqueue: (loop, eventKey, entries) => built.loopIngress.enqueueConversation(loop, eventKey, entries),
+            enqueue: (loop, entries) => built.loopIngress.enqueueConversation(loop, entries),
             tokens: built.keychain,
             directory: built.directory,
             ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),

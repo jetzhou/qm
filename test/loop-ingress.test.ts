@@ -462,31 +462,29 @@ test("conversation events merge into the existing item, reopen it, and never inv
   await w.items.recordAction(item!.id, { kind: "dismissed", outcome: "dismissed" });
   const owner = { latestEvent: { author: "owner", at: 2000, text: "Sent" } };
   assert.equal(
-    await w.ingress.enqueueConversation(w.loop, "e1", [
+    await w.ingress.enqueueConversation(w.loop, [
       { loopId: w.loop.id, dedupeKey: "thread-1", sourceAt: 2000, merge: true, sourcePayload: owner },
       { loopId: w.loop.id, dedupeKey: "unknown", sourceAt: 2000, merge: true, sourcePayload: owner },
     ]),
     true,
   );
-  const [source] = (await w.ingress.list(w.loop.id)).filter((s) => s.kind === "conversation");
+  assert.deepEqual(await w.ingress.list(w.loop.id), []);
+  const [source] = (await w.sources.all()).filter((s) => s.kind === "conversation");
   assert.ok(source);
-  // Enqueueing kicks the worker immediately; wait for it rather than racing it.
   for (let i = 0; i < 100 && !w.fires.length; i++) await new Promise((resolve) => setTimeout(resolve, 5));
   const all = await w.items.byLoop(w.loop.id);
   assert.equal(all.length, 1);
   assert.equal(w.fires.length, 1);
-  // The fake work stage dismissed it again, but only after the event reached it.
   const after = all[0]!;
   assert.equal(after.sourceAt, 2000);
   assert.equal(after.sourceSummary, "Can you send the deck?");
   assert.equal(after.sourcePayload?.title, "Deck");
   assert.deepEqual(after.sourcePayload?.latestEvent, owner.latestEvent);
-  // Reusing an event key is a duplicate delivery.
-  await w.ingress.enqueueConversation(w.loop, "e1", [
-    { loopId: w.loop.id, dedupeKey: "thread-1", sourceAt: 3000, merge: true, sourcePayload: owner },
+  await w.ingress.enqueueConversation(w.loop, [
+    { loopId: w.loop.id, dedupeKey: "thread-1", sourceAt: 2000, merge: true, sourcePayload: owner },
+    { loopId: w.loop.id, dedupeKey: "unknown", sourceAt: 2000, merge: true, sourcePayload: owner },
   ]);
   assert.equal((await w.deliveries.all()).length, 1);
-  // Conversation queues are internal: no HTTP delivery reaches them.
   assert.equal((await w.ingress.receive(source.id, request("webhook", "x", {}))).status, 404);
 });
 
@@ -494,7 +492,7 @@ test("conversation events are not queued for owners outside the rollout", async 
   const w = await world();
   const ingress = createLoopIngress({ ...w.deps, enabledFor: async () => false });
   assert.equal(
-    await ingress.enqueueConversation(w.loop, "e1", [
+    await ingress.enqueueConversation(w.loop, [
       { loopId: w.loop.id, dedupeKey: "k", sourceAt: 1, merge: true, sourcePayload: {} },
     ]),
     false,
@@ -539,12 +537,7 @@ test("Gmail sent mail becomes an owner event on known threads only", async () =>
     sourcePayload: { latestEvent: { author: "owner", at: 2000, text: "Here you go" } },
   });
   assert.equal(entries[1].merge, undefined);
-  assert.deepEqual(entries[1].sourcePayload.latestEvent, {
-    author: "other",
-    at: 3000,
-    text: "Thanks!",
-    from: "Bob <bob@example.com>",
-  });
+  assert.equal(entries[1].sourcePayload.snippet, "Thanks!");
 });
 
 test("the events route queues owner and other messages for known conversations and rejects outsiders", async () => {

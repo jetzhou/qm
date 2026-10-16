@@ -1,6 +1,6 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { ConnectorTokenSource } from "./sources/adapter.ts";
-import type { IngressEntry, LatestEvent } from "./ingress.ts";
+import { conversationEvent, type IngressEntry } from "./ingress.ts";
 
 export interface GmailPushConfig {
   topic: string;
@@ -39,13 +39,8 @@ interface GmailMessage {
   payload?: { headers?: Array<{ name: string; value: string }> };
 }
 
-/** How long a polled (no Pub/Sub) cursor is trusted before the profile is reread. */
 const POLL_CURSOR_TTL_MS = 7 * 86_400_000;
 
-/**
- * Gmail change reader. With Pub/Sub config it registers a push watch; without it
- * the same history cursor is polled, so mailbox events still reach the Loop.
- */
 export function createGmailPushClient(
   tokens: ConnectorTokenSource,
   config: GmailPushConfig | undefined,
@@ -82,7 +77,6 @@ export function createGmailPushClient(
       const profile = await request<{ emailAddress: string }>(owner, "profile");
       const watch = await request<{ historyId: string; expiration: string }>(owner, "watch", {
         topicName: config.topic,
-        // SENT lets the owner's own replies reach the Loop as events.
         labelIds: ["INBOX", "SENT"],
         labelFilterBehavior: "include",
       });
@@ -118,24 +112,12 @@ export function createGmailPushClient(
           const header = (name: string) => headers.find((entry) => entry.name.toLowerCase() === name)?.value;
           const at = Number(message.internalDate);
           if (!message.threadId || !Number.isFinite(at)) throw new Error("Gmail returned invalid message metadata");
-          const latestEvent: LatestEvent = {
-            author: sent ? "owner" : "other",
-            at,
-            ...(message.snippet ? { text: message.snippet } : {}),
-            ...(!sent && header("from") ? { from: header("from") } : {}),
-          };
           if (sent) {
-            // The owner's own mail only updates a thread already on the ledger;
-            // the Loop's work stage decides whether it settled the conversation.
             await ingest([
-              {
-                loopId,
-                source: "gmail",
-                dedupeKey: message.threadId,
-                sourceAt: at,
-                merge: true,
-                sourcePayload: { latestEvent },
-              },
+              conversationEvent(
+                { loopId, sourceKey: message.threadId, source: "gmail" },
+                { author: "owner", at, ...(message.snippet ? { text: message.snippet } : {}) },
+              ),
             ]);
             continue;
           }
@@ -152,7 +134,6 @@ export function createGmailPushClient(
                 from: header("from") ?? cursor.email,
                 snippet: message.snippet ?? "New email",
                 receivedAt: at,
-                latestEvent,
                 externalUrl: `https://mail.google.com/mail/u/${encodeURIComponent(cursor.email)}/#inbox/${message.threadId}`,
                 gmail: {
                   threadId: message.threadId,

@@ -109,23 +109,15 @@ test("shared sidebar prompts follow thread state and whole inbox context", async
       await vite.ssrLoadModule("/src/assistant-sidebar.ts");
     const { render, html } = await vite.ssrLoadModule("lit");
     const thread = { kind: "thread", source: "gmail", hasDraft: true, sent: false, resolved: false };
-    assert.deepEqual(assistantPrompts(thread), ["Make it shorter", "Make it more friendly", "Remove the salutations"]);
-    assert.deepEqual(assistantPrompts({ ...thread, hasDraft: false }), [
-      "Summarize this thread",
-      "Help me write a reply",
-    ]);
-    assert.deepEqual(assistantPrompts({ ...thread, resolved: true }), [
+    const prompts = (context: unknown) => assistantPrompts(context).map((entry: { prompt: string }) => entry.prompt);
+    assert.deepEqual(prompts(thread), ["Make it shorter", "Make it more friendly", "Remove the salutations"]);
+    assert.deepEqual(prompts({ ...thread, hasDraft: false }), ["Summarize this thread", "Help me write a reply"]);
+    assert.deepEqual(prompts({ ...thread, resolved: true }), [
       "Summarize this thread",
       "Does this still need a reply?",
     ]);
-    assert.deepEqual(assistantPrompts({ ...thread, sent: true }), [
-      "Summarize this email",
-      "What should I follow up on?",
-    ]);
-    assert.deepEqual(assistantPrompts({ ...thread, source: "generic" }), [
-      "Explain the proposal",
-      "What needs my input?",
-    ]);
+    assert.deepEqual(prompts({ ...thread, sent: true }), ["Summarize this email", "What should I follow up on?"]);
+    assert.deepEqual(prompts({ ...thread, source: "generic" }), ["Explain the proposal", "What needs my input?"]);
     const contexts = [thread, { kind: "inbox", hasEmail: true, hasSlack: false, hasDrafts: false }];
     const classes: string[] = [];
     for (const context of contexts) {
@@ -145,7 +137,7 @@ test("shared sidebar prompts follow thread state and whole inbox context", async
         "Keep it short.\nTwo lines.",
       );
       host.querySelector<HTMLButtonElement>(".suggested-activity")!.click();
-      assert.deepEqual(clicked, [assistantPrompts(context)[0]]);
+      assert.deepEqual(clicked, [prompts(context)[0]]);
       classes.push([...new Set([...host.querySelectorAll("[class]")].map((element) => element.className))].join("|"));
     }
     assert.equal(classes[0], classes[1]);

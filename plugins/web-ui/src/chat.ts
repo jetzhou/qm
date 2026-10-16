@@ -152,7 +152,6 @@ import {
   harnessSupportsFastMode,
 } from "./model-options";
 import {
-  brandName,
   attachmentGallery,
   avatarTpl,
   brandMark,

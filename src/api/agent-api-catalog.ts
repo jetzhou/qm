@@ -220,7 +220,8 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     match: (m, p) =>
-      /^\/v1\/loops\/[^/]+\/items(\/[^/]+(\/(action|followup))?)?$/.test(p) && (m === "GET" || m === "POST"),
+      (/^\/v1\/loops\/[^/]+\/items(\/[^/]+(\/(action|followup))?)?$/.test(p) && (m === "GET" || m === "POST")) ||
+      (m === "POST" && p.startsWith("/v1/loops/") && p.endsWith("/events")),
     guidance:
       "A loop's ledger is its durable queue of work items. Each entry carries an opaque sourcePayload the loop's own frontend understands, a proposal held for human review, and a follow-up chat thread. States run pending -> processed -> held -> actioned|dismissed. Ingest only what the loop's playbook tells you to; proposals are prepared, never executed — the person actions them from their review surface.",
     routes: [
@@ -257,7 +258,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/loops/:id/events",
         summary:
-          "report new messages in conversations already on the ledger — body {events:[{sourceKey, author, at, text?}]}; each event is judged by the loop's work stage, which may close or redraft the item",
+          'report new messages in conversations already on the ledger — body {events:[{sourceKey, author:"owner"|"other", at, text?, from?}]}; each event is judged by the loop\'s work stage, which may close or redraft the item',
       },
     ],
   },

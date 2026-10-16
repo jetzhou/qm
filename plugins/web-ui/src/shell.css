@@ -9174,7 +9174,6 @@ h3.ambient-field-label {
   }
 }
 
-/* Stacked below the source, the assistant grows with the page instead of scrolling inside itself. */
 .inbox-chat > .custom-chat-shell {
   grid-template-rows: auto auto;
 }
@@ -9523,16 +9522,6 @@ h3.ambient-field-label {
 .inbox-draft-actions {
   display: flex;
   justify-content: flex-end;
-}
-.inbox-draft-send {
-  height: 32px;
-  padding: 0 14px;
-  border-radius: 999px;
-  font-weight: 600;
-}
-.inbox-draft-send:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 .inbox-reactions {
   display: flex;
