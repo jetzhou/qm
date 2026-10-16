@@ -84,8 +84,6 @@ async function change(ctx: ApiCtx) {
 async function events(ctx: ApiCtx) {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
-  if (!(await ctx.deps.featureFlags?.enabled("inbox_loops", scopeId("personal", loaded.loop.owner))))
-    return sendJson(ctx.res, 403, { error: "feature_disabled" });
   const ingress = ctx.deps.loopIngress;
   if (!ingress) return sendJson(ctx.res, 404, { error: "unavailable" });
   if (loaded.loop.state === "archived") return sendJson(ctx.res, 409, { error: "archived" });

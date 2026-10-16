@@ -1135,9 +1135,9 @@ test("Slack work and follow-up prompts preserve message images without repeating
 });
 
 test("a reply Loop's work stage can settle an event as replied or no reply needed", async () => {
-  for (const [kind, actionKind] of [
-    ["replied", "replied"],
-    ["no_reply_needed", "dismissed"],
+  for (const [kind, actionKind, actionResult] of [
+    ["replied", "replied", "Sent it over"],
+    ["no_reply_needed", "dismissed", "Answered in Gmail"],
   ] as const) {
     let judged = false;
     const w = service((req) => {
@@ -1166,7 +1166,7 @@ test("a reply Loop's work stage can settle an event as replied or no reply neede
     const [item] = await w.items.byLoop(loop.id);
     assert.equal(item?.status, "skipped");
     assert.equal(item?.actionKind, actionKind);
-    assert.equal(item?.actionResult, "Answered in Gmail");
+    assert.equal(item?.actionResult, actionResult);
     assert.equal(item?.proposal, undefined);
     assert.equal(judged, false);
     assert.deepEqual(result.summary?.ready, []);

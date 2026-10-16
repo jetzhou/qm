@@ -1,13 +1,9 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { DirectiveResult } from "lit/directive.js";
-import { ref } from "lit/directives/ref.js";
-import { Check, Copy } from "lucide";
+import { Send } from "lucide";
 import { markdown } from "./message-markdown";
 import { icon } from "./icons";
-import { formatMessageTime } from "./message-time.ts";
 import { tip } from "./tooltip";
-import { copyText } from "./ui";
-import { suggestedActivities } from "./suggested-activities";
 
 type Content = TemplateResult | DirectiveResult | typeof nothing;
 
@@ -15,74 +11,43 @@ export type AssistantSidebarContext =
   | { kind: "thread"; source: string; hasDraft: boolean; sent: boolean; resolved: boolean }
   | { kind: "inbox"; hasEmail: boolean; hasSlack: boolean; hasDrafts: boolean };
 
-interface AssistantPrompt {
-  prompt: string;
-  icon: string;
-}
-
-const read = (prompt: string): AssistantPrompt => ({ prompt, icon: "📝" });
-const write = (prompt: string): AssistantPrompt => ({ prompt, icon: "✏️" });
-const ask = (prompt: string): AssistantPrompt => ({ prompt, icon: "👀" });
-
-export function assistantPrompts(context: AssistantSidebarContext): readonly AssistantPrompt[] {
-  if (context.kind === "inbox")
-    return [
-      read(context.hasEmail && !context.hasSlack ? "Summarize my recent emails" : "Summarize my inbox"),
-      ask(context.hasDrafts ? "Which drafts should I review first?" : "What needs my attention?"),
-    ];
-  if (context.sent) return [read("Summarize this email"), ask("What should I follow up on?")];
-  if (context.source === "generic") return [read("Explain the proposal"), ask("What needs my input?")];
-  if (context.resolved) return [read("Summarize this thread"), ask("Does this still need a reply?")];
-  if (context.hasDraft)
-    return [write("Make it shorter"), write("Make it more friendly"), write("Remove the salutations")];
-  return [read("Summarize this thread"), write("Help me write a reply")];
-}
-
-export function assistantSuggestions(
-  context: AssistantSidebarContext,
-  onPrompt: (prompt: string, origin: HTMLElement | null) => void,
-  busy = false,
-): TemplateResult | typeof nothing {
-  let origin: HTMLElement | null = null;
-  return html`<div class="assistant-suggestions" ${ref((el) => (origin = (el as HTMLElement | undefined) ?? null))}>
-    ${suggestedActivities(
-      assistantPrompts(context).map(({ prompt, icon }) => ({ id: prompt, title: prompt, prompt, icon })),
-      (activity) => onPrompt(activity.prompt, origin),
-      busy,
-    )}
-  </div>`;
-}
-
-function messageMeta(text: string, at?: number): TemplateResult {
-  return html`<div class="message-meta">
-    ${at !== undefined ? html`<span class="message-time">${formatMessageTime(at)}</span>` : nothing}
-    <button
-      class="msg-copy"
-      type="button"
-      ${tip("Copy")}
-      aria-label="Copy message"
-      @click=${(e: Event) => void copyText(text, e.currentTarget as HTMLButtonElement)}
-    >
-      ${icon(Copy, 13)}${icon(Check, 13)}
-    </button>
-  </div>`;
+export function assistantPrompts(context: AssistantSidebarContext): readonly string[] {
+  if (context.kind === "inbox") {
+    const prompts = [context.hasEmail && !context.hasSlack ? "Summarize my recent emails" : "Summarize my inbox"];
+    prompts.push(context.hasDrafts ? "Which drafts should I review first?" : "What needs my attention?");
+    return prompts;
+  }
+  if (context.sent) return ["Summarize this email", "What should I follow up on?"];
+  if (context.source === "generic") return ["Explain the proposal", "What needs my input?"];
+  if (context.resolved) return ["Summarize this thread", "Does this still need a reply?"];
+  if (context.hasDraft) return ["Make it shorter", "Make it more friendly", "Remove the salutations"];
+  return ["Summarize this thread", "Help me write a reply"];
 }
 
 export function assistantMessage(options: {
   role: "human" | "agent" | "system";
-  text: string;
-  at?: number;
+  text?: string;
+  content?: Content;
+  before?: Content;
+  after?: Content;
+  meta?: Content;
+  index?: number;
+  entrySeqs?: string;
+  streaming?: boolean;
 }): TemplateResult {
-  const meta = options.text.trim() ? messageMeta(options.text, options.at) : nothing;
-  if (options.role === "human")
-    return html`<article class="message-row user-row">
-      <div class="message-bubble user-bubble" ?hidden=${!options.text.trim()}>
-        <div class="pin-content">${markdown(options.text)}</div>
-      </div>
-      ${meta}
-    </article>`;
-  return html`<article class="message-row assistant-row ${options.role === "system" ? "system-row" : ""}">
-    <div class="assistant-body">${markdown(options.text)} ${meta}</div>
+  const human = options.role === "human";
+  return html`<article
+    class="inbox-chat-msg ${options.role} ${options.meta && options.meta !== nothing ? "message-row" : ""} ${options.streaming ? "streaming" : ""}"
+    data-index=${options.index ?? nothing}
+    data-entry-seqs=${options.entrySeqs ?? nothing}
+  >
+    ${options.before ?? nothing}
+    ${
+      human || options.role === "system"
+        ? html`<span class="inbox-chat-text" ?hidden=${human && !options.text?.trim()}>${options.text ?? ""}</span>`
+        : html`<div class="assistant-body">${options.content ?? markdown(options.text ?? "")}</div>`
+    }
+    ${options.after ?? nothing} ${options.meta ?? nothing}
   </article>`;
 }
 
@@ -93,20 +58,40 @@ export function assistantSidebar(options: {
   showPrompts: boolean;
   busy?: boolean;
   status?: Content;
-  cta?: string;
-  onPrompt: (prompt: string, origin: HTMLElement | null) => void;
+  toolbar?: Content;
+  send?: { disabled: boolean; run: (event: MouseEvent) => void };
+  onPrompt: (prompt: string, event: MouseEvent) => void;
+  overlay?: Content;
+  onDragEnter?: (event: DragEvent) => void;
+  onDragOver?: (event: DragEvent) => void;
+  onDragLeave?: (event: DragEvent) => void;
+  onDrop?: (event: DragEvent) => void;
 }): TemplateResult {
-  const empty = options.showPrompts;
-  return html`<div class="custom-chat inbox-chat">
-    <div class="custom-chat-shell in-pane ${empty ? "empty-chat" : ""}">
-      <section class="chat-scroll inbox-chat-log" tabindex="0" aria-label="Conversation">
-        <div class="message-stack ${empty ? "empty-stack" : ""}">
-          ${options.messages} ${options.status ?? nothing}
-          ${empty && options.cta ? html`<h1 class="chat-cta">${options.cta}</h1>` : nothing}
-          ${empty ? assistantSuggestions(options.context, options.onPrompt, options.busy) : nothing}
-        </div>
-      </section>
-      <div class="chat-bottom-dock inbox-chat-composer">${options.composer}</div>
+  return html`<div
+    class="inbox-chat assistant-sidebar"
+    @dragenter=${options.onDragEnter}
+    @dragover=${options.onDragOver}
+    @dragleave=${options.onDragLeave}
+    @drop=${options.onDrop}
+  >
+    ${options.overlay ?? nothing}
+    <section class="chat-scroll inbox-chat-log" tabindex="0" aria-label="Conversation">
+      <div class="message-stack">${options.messages}</div>
+    </section>
+    ${options.status ?? nothing}
+    <div class="chat-bottom-dock">
+      ${options.toolbar ?? nothing}
+      ${
+        options.send || options.showPrompts
+          ? html`<div class="inbox-chat-suggestions">
+              ${options.send ? html`<button class="inbox-suggest-chip primary" type="button" ?disabled=${options.send.disabled} ${tip("Send the draft with your instructions")} @click=${options.send.run}>${icon(Send, 12)}<span>Send it</span></button>` : nothing}
+              <div class="inbox-edit-suggestions">
+                ${(options.showPrompts ? assistantPrompts(options.context) : []).map((prompt) => html`<button class="inbox-suggest-chip inbox-chat-suggestion" type="button" ?disabled=${options.busy} @click=${(event: MouseEvent) => options.onPrompt(prompt, event)}>${prompt}</button>`)}
+              </div>
+            </div>`
+          : nothing
+      }
+      <div class="inbox-chat-composer">${options.composer}</div>
     </div>
   </div>`;
 }

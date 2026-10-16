@@ -64,7 +64,7 @@ test("inbox sidebar restores its conversation and releases it on native navigati
     )!;
     suggestion.click();
     assert.equal(sidebar.querySelector<HTMLTextAreaElement>("textarea")!.value, "Summarize my inbox");
-    assert.ok(suggestion.closest(".message-stack"));
+    assert.ok(suggestion.closest(".chat-bottom-dock"));
     render(inboxChat({ kind: "inbox", hasEmail: true, hasSlack: false, hasDrafts: false }), host);
     await until(() => sidebar.textContent!.includes("Summarize my recent emails"));
     assert.equal(
@@ -76,13 +76,10 @@ test("inbox sidebar restores its conversation and releases it on native navigati
     const text = "Summarize this inbox\nKeep it brief.";
     conversation.state.agent.state.messages = [{ role: "user", content: text, timestamp: 100 }];
     conversation.redraw();
-    assert.equal(
-      sidebar.querySelector<HTMLElement & { content: string }>(".user-row .user-bubble qm-markdown")?.content,
-      text,
-    );
-    assert.ok(sidebar.querySelector(".custom-chat-shell.in-pane"), "the inbox assistant is the main chat in pane mode");
+    assert.equal(sidebar.querySelector(".inbox-chat-msg.human .inbox-chat-text")?.textContent, text);
+    assert.equal(sidebar.querySelector(".user-row, .pin-toggle"), null);
     assert.ok(sidebar.querySelector('[aria-label="Copy message"]'));
-    assert.ok(sidebar.querySelector(".chat-bottom-dock .composer-wrap"));
+    assert.ok(sidebar.querySelector(".inbox-chat-composer .composer-wrap"));
     const count = allConversations().length;
     host.replaceChildren();
     assert.equal(allConversations().length, count - 1);
@@ -109,15 +106,23 @@ test("shared sidebar prompts follow thread state and whole inbox context", async
       await vite.ssrLoadModule("/src/assistant-sidebar.ts");
     const { render, html } = await vite.ssrLoadModule("lit");
     const thread = { kind: "thread", source: "gmail", hasDraft: true, sent: false, resolved: false };
-    const prompts = (context: unknown) => assistantPrompts(context).map((entry: { prompt: string }) => entry.prompt);
-    assert.deepEqual(prompts(thread), ["Make it shorter", "Make it more friendly", "Remove the salutations"]);
-    assert.deepEqual(prompts({ ...thread, hasDraft: false }), ["Summarize this thread", "Help me write a reply"]);
-    assert.deepEqual(prompts({ ...thread, resolved: true }), [
+    assert.deepEqual(assistantPrompts(thread), ["Make it shorter", "Make it more friendly", "Remove the salutations"]);
+    assert.deepEqual(assistantPrompts({ ...thread, hasDraft: false }), [
+      "Summarize this thread",
+      "Help me write a reply",
+    ]);
+    assert.deepEqual(assistantPrompts({ ...thread, resolved: true }), [
       "Summarize this thread",
       "Does this still need a reply?",
     ]);
-    assert.deepEqual(prompts({ ...thread, sent: true }), ["Summarize this email", "What should I follow up on?"]);
-    assert.deepEqual(prompts({ ...thread, source: "generic" }), ["Explain the proposal", "What needs my input?"]);
+    assert.deepEqual(assistantPrompts({ ...thread, sent: true }), [
+      "Summarize this email",
+      "What should I follow up on?",
+    ]);
+    assert.deepEqual(assistantPrompts({ ...thread, source: "generic" }), [
+      "Explain the proposal",
+      "What needs my input?",
+    ]);
     const contexts = [thread, { kind: "inbox", hasEmail: true, hasSlack: false, hasDrafts: false }];
     const classes: string[] = [];
     for (const context of contexts) {
@@ -132,17 +137,15 @@ test("shared sidebar prompts follow thread state and whole inbox context", async
         }),
         host,
       );
-      assert.equal(
-        host.querySelector<HTMLElement & { content: string }>(".user-row .user-bubble qm-markdown")!.content,
-        "Keep it short.\nTwo lines.",
-      );
-      host.querySelector<HTMLButtonElement>(".suggested-activity")!.click();
-      assert.deepEqual(clicked, [prompts(context)[0]]);
+      assert.equal(host.querySelector(".inbox-chat-text")!.textContent, "Keep it short.\nTwo lines.");
+      host.querySelector<HTMLButtonElement>(".inbox-chat-suggestion")!.click();
+      assert.deepEqual(clicked, [assistantPrompts(context)[0]]);
       classes.push([...new Set([...host.querySelectorAll("[class]")].map((element) => element.className))].join("|"));
     }
     assert.equal(classes[0], classes[1]);
-    render(assistantMessage({ role: "human", text: "" }), host);
-    assert.equal(host.querySelector<HTMLElement>(".user-bubble")!.hidden, true);
+    render(assistantMessage({ role: "human", text: "", before: html`<a>Attachment</a>` }), host);
+    assert.equal(host.querySelector<HTMLElement>(".inbox-chat-text")!.hidden, true);
+    assert.equal(host.querySelector("a")!.textContent, "Attachment");
   } finally {
     await close();
   }

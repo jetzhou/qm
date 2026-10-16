@@ -732,10 +732,13 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
             const parsed = fencedJson(outcome.reply ?? "");
             const resolution = isReplyLoop(loop, item) ? parseResolution(parsed) : null;
             if (resolution) {
+              const latest = item.sourcePayload?.latestEvent as { author?: string; text?: unknown } | undefined;
+              const ownText = latest?.author === "owner" && typeof latest.text === "string" ? latest.text : undefined;
+              const result = resolution.kind === "replied" ? ownText : resolution.reason;
               await deps.items.recordAction(item.id, {
                 kind: resolution.kind === "replied" ? "replied" : "dismissed",
                 outcome: "dismissed",
-                ...(resolution.reason ? { result: resolution.reason } : {}),
+                ...(result ? { result } : {}),
               });
               return { runId: outcome.sessionId ?? `${threadRef}:work:${item.id}` };
             }
