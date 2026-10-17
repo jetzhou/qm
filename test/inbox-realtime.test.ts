@@ -95,10 +95,31 @@ test("someone else's messages are queued as other events with their sender", asy
     text: "any word?",
     senderEmail: "ada@example.com",
   });
-  assert.deepEqual(rt.calls.map(latest), [
-    [["D123", { author: "other", at: 3_000_000, text: "ping", from: "sam@example.com" }]],
-    [["gmail:t-1", { author: "other", at: 3_001_000, text: "any word?", from: "ada@example.com" }]],
-  ]);
+  assert.deepEqual(
+    rt.calls.map((entries) => entries.map((entry) => [entry.dedupeKey, entry.sourcePayload])),
+    [
+      [
+        [
+          "D123",
+          {
+            latestEvent: { author: "other", at: 3_000_000, from: "sam@example.com" },
+            receivedAt: 3_000_000,
+            snippet: "ping",
+          },
+        ],
+      ],
+      [
+        [
+          "gmail:t-1",
+          {
+            latestEvent: { author: "other", at: 3_001_000, from: "ada@example.com" },
+            receivedAt: 3_001_000,
+            snippet: "any word?",
+          },
+        ],
+      ],
+    ],
+  );
 });
 
 test("events in unrelated conversations or other sources queue nothing", async () => {

@@ -48,7 +48,8 @@ export function conversationEvent(
   event: LatestEvent,
 ): IngressEntry {
   const text = event.text?.trim().slice(0, EVENT_TEXT_CHARS);
-  const from = event.author === "other" ? event.from?.slice(0, 300) : undefined;
+  const other = event.author === "other";
+  const from = other ? event.from?.slice(0, 300) : undefined;
   return {
     loopId: item.loopId,
     dedupeKey: item.sourceKey,
@@ -56,8 +57,13 @@ export function conversationEvent(
     sourceAt: event.at,
     merge: true,
     sourcePayload: {
-      latestEvent: { author: event.author, at: event.at, ...(text ? { text } : {}), ...(from ? { from } : {}) },
-      ...(event.author === "other" ? { receivedAt: event.at } : {}),
+      latestEvent: {
+        author: event.author,
+        at: event.at,
+        ...(text && !other ? { text } : {}),
+        ...(from ? { from } : {}),
+      },
+      ...(other ? { receivedAt: event.at, ...(text ? { snippet: text } : {}) } : {}),
     },
   };
 }
@@ -181,7 +187,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
           });
           await deps.sources.merge(source.id, { lastError: undefined });
         } catch (error) {
-          if (source.kind === "conversation") swallow("Loop conversation event", error);
+          swallow("Loop ingress delivery", error);
           await deps.sources.merge(source.id, { lastError: errMessage(error) });
           await deps.deliveries.merge(delivery.id, {
             nextAttemptAt: Date.now() + Math.min(3_600_000, 30_000 * 2 ** Math.min(attempt, 7)),
@@ -256,7 +262,6 @@ export function createLoopIngress(deps: LoopIngressDeps) {
     async enqueueConversation(loop: Pick<Loop, "id" | "owner">, entries: IngressEntry[]): Promise<boolean> {
       if (!entries.length || !(await deps.enabledFor(loop.owner))) return false;
       const source = await conversationSource(loop);
-      if (!source.enabled) return false;
       await enqueue(source, hashId(entries.map((entry) => `${entry.dedupeKey}:${entry.sourceAt}`)), { entries });
       void process(source.id).catch((error) => swallow("Loop conversation event", error));
       return true;

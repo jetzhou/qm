@@ -485,7 +485,8 @@ test("conversation events reopen a known item for others' messages, skip the own
   assert.equal(after.sourceAt, 2000);
   assert.equal(after.sourceSummary, "Can you send the deck?");
   assert.equal(after.sourcePayload?.title, "Deck");
-  assert.deepEqual(after.sourcePayload?.latestEvent, { author: "other", at: 2000, text: "other", from: "Bob" });
+  assert.deepEqual(after.sourcePayload?.latestEvent, { author: "other", at: 2000, from: "Bob" });
+  assert.equal(after.sourcePayload?.snippet, "other");
   assert.equal(w.fires.length, 1);
 
   await w.ingress.enqueueConversation(w.loop, [event("thread-1", "other", 2000)]);

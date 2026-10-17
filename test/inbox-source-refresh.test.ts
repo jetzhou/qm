@@ -306,13 +306,7 @@ test("missing or unsafe directory photos retain initials", async () => {
 
 test("avatar-only refresh does not suppress full Slack context refresh", async () => {
   const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0", userId: "U1" });
-  const refresh = createInboxSourceRefresh({
-    featureFlags,
-    items,
-    tokens,
-    directory,
-    fetchImpl: slackFetch([]),
-  });
+  const refresh = createInboxSourceRefresh({ featureFlags, items, tokens, directory, fetchImpl: slackFetch([]) });
   await refresh("owner", [item], "avatars");
   await refresh("owner", [(await items.get(item.id))!]);
   const after = (await items.get(item.id))!;
@@ -734,24 +728,20 @@ test("Slack-id principals and items without a known sender use only the director
     getBySlackId: async (id: string) =>
       id === "U1" ? { principalId: "U1", displayName: "Alex", type: "internal" as const, avatarUrl: ALEX } : null,
   };
-  await createInboxSourceRefresh({
-    featureFlags,
-    items,
-    tokens,
-    directory: slackIdMode,
-    fetchImpl,
-  })("owner", [item], "avatars");
+  await createInboxSourceRefresh({ featureFlags, items, tokens, directory: slackIdMode, fetchImpl })(
+    "owner",
+    [item],
+    "avatars",
+  );
   assert.deepEqual((await items.get(item.id))!.sourcePayload!.participants, [
     { id: "U1", name: "Alex", avatarUrl: ALEX },
   ]);
   const legacy = await fixture("slack", { channelId: "D2", ts: "1.0" });
-  await createInboxSourceRefresh({
-    featureFlags,
-    items: legacy.items,
-    tokens,
-    directory,
-    fetchImpl,
-  })("owner", [legacy.item], "avatars");
+  await createInboxSourceRefresh({ featureFlags, items: legacy.items, tokens, directory, fetchImpl })(
+    "owner",
+    [legacy.item],
+    "avatars",
+  );
   assert.deepEqual(await legacy.items.get(legacy.item.id), legacy.item);
 });
 

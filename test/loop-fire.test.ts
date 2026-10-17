@@ -1137,7 +1137,7 @@ test("Slack work and follow-up prompts preserve message images without repeating
 test("a reply Loop's work stage can settle an event as replied or no reply needed", async () => {
   for (const [kind, actionKind, actionResult] of [
     ["replied", "replied", "Sent it over"],
-    ["no_reply_needed", "dismissed", "Answered in Gmail"],
+    ["no_reply_needed", "no_reply_needed", "Answered in Gmail"],
   ] as const) {
     let judged = false;
     const w = service((req) => {

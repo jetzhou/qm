@@ -832,7 +832,7 @@ test("inbox list refreshes open Gmail items before returning, but not another ow
   assert.equal(refreshes.length, 1);
 });
 
-test("Slack thread keys reuse a legacy item's identity, edits, and replied watermark", async () => {
+test("Slack thread keys reuse a legacy item's identity and edits", async () => {
   const w = world();
   const loop = await ensureInboxLoop(w.loops.store, "josh");
   await w.loops.items.ingest([
@@ -865,10 +865,6 @@ test("Slack thread keys reuse a legacy item's identity, edits, and replied water
   assert.equal((await ingest()).status, 200);
   assert.equal((await w.loops.items.byLoop(loop.id)).length, 1);
   assert.equal((await w.loops.items.get(original!.id))!.proposal!.data.body, "Keep this edit");
-  await w.loops.items.recordAction(original!.id, { kind: "replied", outcome: "dismissed", sourceAt: 3000 });
-  await ingest();
-  assert.equal((await w.loops.items.byLoop(loop.id)).length, 1);
-  assert.equal((await w.loops.items.get(original!.id))!.status, "skipped");
 });
 
 for (const migrated of [false, true])

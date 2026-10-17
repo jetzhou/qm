@@ -136,6 +136,7 @@ export interface InboxItem {
   dismissedAt?: number;
   repliedAt?: number;
   externalReplyText?: string;
+  dismissedReason?: string;
   reactions?: string[];
   probablyResolved?: boolean;
   automated?: boolean;
@@ -459,6 +460,7 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
     ...(resolved === "dismissed" && entry.actedAt !== undefined ? { dismissedAt: entry.actedAt } : {}),
     ...(resolved === "replied" && entry.actedAt !== undefined ? { repliedAt: entry.actedAt } : {}),
     ...(resolved === "replied" && entry.actionResult ? { externalReplyText: entry.actionResult } : {}),
+    ...(entry.actionKind === "no_reply_needed" && entry.actionResult ? { dismissedReason: entry.actionResult } : {}),
   };
 }
 
@@ -1485,6 +1487,14 @@ export function handledNoteTpl(item: InboxItem): TemplateResult {
       ${item.externalReplyText ? html`<div class="inbox-replied-text">${slackTextTpl(item, item.externalReplyText)}</div>` : nothing}
     </div>`;
   }
+  if (item.dismissedReason)
+    return html`<div class="inbox-handled-note inbox-replied-note">
+      <div class="inbox-handled-line">
+        ${icon(X, 13)}<span>No reply needed ${item.dismissedAt ? relTime(item.dismissedAt) : ""}</span>
+        ${reopenButtonTpl(item)}
+      </div>
+      <div class="inbox-replied-text">${item.dismissedReason}</div>
+    </div>`;
   return html`<div class="inbox-handled-note">
     ${icon(X, 13)}<span>Dismissed ${item.dismissedAt ? relTime(item.dismissedAt) : ""}</span>
     ${reopenButtonTpl(item)}
