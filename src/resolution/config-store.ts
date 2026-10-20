@@ -40,7 +40,6 @@ export interface PersistedSoulRevision {
 }
 type SoulSnapshot = PersistedSoul | null;
 export type ScopedRow<K extends string, V> = { scopeId: ScopeId } & Record<K, V>;
-export type PersistedCommandPolicy = ScopedRow<"policy", CommandPolicy>;
 export type PersistedSecurityPosture = ScopedRow<"posture", SecurityPosture>;
 export type PersistedSharingPosture = ScopedRow<"posture", SharingPosture>;
 export type PersistedApprovalGrantModes = ScopedRow<"modes", ApprovalGrantModes>;
@@ -85,7 +84,6 @@ export interface PersistedSlackEmojiCatalog {
   updatedAt: number;
 }
 
-export type PersistedPeopleDirectoryUrl = ScopedRow<"url", string>;
 export interface OrgBranding {
   accent?: string;
   mark?: string;
@@ -93,8 +91,6 @@ export interface OrgBranding {
   selfLabel?: string;
   orgName?: string;
 }
-export type PersistedBrowseMaxSteps = ScopedRow<"steps", number>;
-export type PersistedBrowseModel = ScopedRow<"modelId", string>;
 interface AutoFlaggerConfig {
   harnessId: string;
   modelId: string;
@@ -223,7 +219,7 @@ export interface ConfigStoreMaps {
   connectorClients?: DurableMap<StoredConnectorClient>;
   souls?: DurableMap<PersistedSoul>;
   soulHistory?: DurableMap<PersistedSoulRevision>;
-  commandPolicies?: DurableMap<PersistedCommandPolicy>;
+  commandPolicies?: DurableMap<ScopedRow<"policy", CommandPolicy>>;
   securityPostures?: DurableMap<PersistedSecurityPosture>;
   sharingPostures?: DurableMap<PersistedSharingPosture>;
   approvalGrantModes?: DurableMap<PersistedApprovalGrantModes>;
@@ -238,13 +234,13 @@ export interface ConfigStoreMaps {
   interactiveFastMode?: DurableMap<PersistedScopedFlag>;
   individualModelAuth?: DurableMap<PersistedModelAccount>;
   webuiModels?: DurableMap<ScopedRow<"ids", string[]>>;
-  peopleDirectoryUrls?: DurableMap<PersistedPeopleDirectoryUrl>;
+  peopleDirectoryUrls?: DurableMap<ScopedRow<"url", string>>;
   ackEmoji?: DurableMap<ScopedRow<"names", string[]>>;
   pinnedSkills?: DurableMap<ScopedRow<"names", string[]>>;
   slackEmojiCatalog?: DurableMap<PersistedSlackEmojiCatalog>;
   branding?: DurableMap<ScopedRow<"branding", OrgBranding>>;
-  browseMaxSteps?: DurableMap<PersistedBrowseMaxSteps>;
-  browseModels?: DurableMap<PersistedBrowseModel>;
+  browseMaxSteps?: DurableMap<ScopedRow<"steps", number>>;
+  browseModels?: DurableMap<ScopedRow<"modelId", string>>;
   autoFlaggerConfigs?: DurableMap<PersistedAutoFlaggerConfig>;
   deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
 }
@@ -280,7 +276,9 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
 };
 
 export const configStoreMaps = (map: (table: string) => DurableMap<never>): Required<ConfigStoreMaps> =>
-  Object.fromEntries(Object.entries(CONFIG_STORE_TABLES).map(([key, table]) => [key, map(table)])) as Required<ConfigStoreMaps>;
+  Object.fromEntries(
+    Object.entries(CONFIG_STORE_TABLES).map(([key, table]) => [key, map(table)]),
+  ) as unknown as Required<ConfigStoreMaps>;
 
 export function createMemoryConfigStore(
   orgId: string,
@@ -314,8 +312,11 @@ export function createMemoryConfigStore(
     const store = durable ?? createMemoryMap<R>();
     const cache = new Map<ScopeId, T>();
     const load = (id: ScopeId, row: R | null) => (row ? cache.set(id, read(row)) : cache.delete(id));
+    const refresh = async (id: ScopeId) => void load(id, await store.get(id));
     return {
       store,
+      refresh,
+      reload: (id: ScopeId) => writeQueue(`${name}:${id}`, () => refresh(id)),
       get: (id: ScopeId) => cache.get(id),
       durable: async (id: ScopeId) => {
         const row = await store.get(id);
@@ -332,8 +333,6 @@ export function createMemoryConfigStore(
       async hydrate() {
         for (const row of await store.all()) load(row.scopeId, row);
       },
-      refresh: async (id: ScopeId) => void load(id, await store.get(id)),
-      reload: (id: ScopeId) => writeQueue(`${name}:${id}`, async () => void load(id, await store.get(id))),
     };
   };
   const field = <K extends string, V>(name: string, durable: DurableMap<ScopedRow<K, V>> | undefined, key: K) =>
@@ -356,7 +355,12 @@ export function createMemoryConfigStore(
     internalMemberOverrides: field("internalMemberOverrides", opts.internalMemberOverrides, "members"),
     orgAmbient: field("orgAmbient", opts.orgAmbient, "on"),
     interactiveFastMode: field("interactiveFastMode", opts.interactiveFastMode, "on"),
-    individualModelAuth: field("individualModelAuth", opts.individualModelAuth, "on"),
+    individualModelAuth: setting(
+      "individualModelAuth",
+      opts.individualModelAuth,
+      (row) => row.on,
+      (id, on: boolean): PersistedModelAccount => ({ scopeId: id, on }),
+    ),
     webuiModels: field("webuiModels", opts.webuiModels, "ids"),
     peopleDirectoryUrls: field("peopleDir", opts.peopleDirectoryUrls, "url"),
     ackEmoji: field("ackEmoji", opts.ackEmoji, "names"),
@@ -813,7 +817,9 @@ export function createMemoryConfigStore(
     setIndividualModelAuth: (on) => settings.individualModelAuth.set(org, on),
     async getIndividualModelAuthDurable(principalId) {
       if (await settings.individualModelAuth.durable(org)) return true;
-      return principalId ? ((await settings.individualModelAuth.durable(scopeId("personal", principalId))) ?? false) : false;
+      return principalId
+        ? ((await settings.individualModelAuth.durable(scopeId("personal", principalId))) ?? false)
+        : false;
     },
     async getModelAccountDurable(principalId) {
       const row = await settings.individualModelAuth.store.get(scopeId("personal", principalId));
@@ -939,10 +945,7 @@ export function createMemoryConfigStore(
       };
     },
     async refreshScope(id) {
-      const [
-        soul,
-        baseModel,
-      ] = await Promise.all([
+      const [soul, baseModel] = await Promise.all([
         soulStore.get(id),
         baseModelStore.get(id),
         ...allSettings.map((setting) => setting.refresh(id)),

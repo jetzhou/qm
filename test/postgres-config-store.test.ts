@@ -1,6 +1,11 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { configStoreMaps, createMemoryConfigStore } from "../src/resolution/config-store.ts";
+import {
+  configStoreMaps,
+  createMemoryConfigStore,
+  type PersistedSoul,
+  type PersistedSoulRevision,
+} from "../src/resolution/config-store.ts";
 import { settle } from "./support/settle.ts";
 import {
   createMemoryMap,

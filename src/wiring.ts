@@ -87,11 +87,7 @@ import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts"
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
-import {
-  configStoreMaps,
-  createMemoryConfigStore,
-  type ScopedConfigStore,
-} from "./resolution/config-store.ts";
+import { configStoreMaps, createMemoryConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
 import { createAclStore, type AclStore } from "./acl/acl-store.ts";
 import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
