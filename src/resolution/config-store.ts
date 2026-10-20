@@ -193,8 +193,6 @@ export interface ScopedConfigStore {
   setPinnedSkills(id: ScopeId, names: string[]): Promise<void>;
   setSlackEmojiCatalog(id: ScopeId, emoji: Record<string, string>): Promise<void>;
   getSlackEmojiCatalogDurable(id: ScopeId): Promise<PersistedSlackEmojiCatalog | null>;
-  getPeopleDirectoryUrl(id: ScopeId): string | null;
-  setPeopleDirectoryUrl(id: ScopeId, url: string | null): Promise<void>;
   getBranding(id: ScopeId): OrgBranding | null;
   setBranding(id: ScopeId, branding: OrgBranding | null): Promise<void>;
   getBrandingDurable(id: ScopeId): Promise<OrgBranding | null>;
@@ -234,7 +232,6 @@ export interface ConfigStoreMaps {
   interactiveFastMode?: DurableMap<PersistedScopedFlag>;
   individualModelAuth?: DurableMap<PersistedModelAccount>;
   webuiModels?: DurableMap<ScopedRow<"ids", string[]>>;
-  peopleDirectoryUrls?: DurableMap<ScopedRow<"url", string>>;
   ackEmoji?: DurableMap<ScopedRow<"names", string[]>>;
   pinnedSkills?: DurableMap<ScopedRow<"names", string[]>>;
   slackEmojiCatalog?: DurableMap<PersistedSlackEmojiCatalog>;
@@ -264,7 +261,6 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   interactiveFastMode: "interactive_fast_mode_flag",
   individualModelAuth: "individual_model_auth_flag",
   webuiModels: "webui_model_configs",
-  peopleDirectoryUrls: "people_directory_urls",
   ackEmoji: "ack_emoji",
   pinnedSkills: "pinned_skills",
   slackEmojiCatalog: "slack_emoji_catalog",
@@ -362,7 +358,6 @@ export function createMemoryConfigStore(
     interactiveFastMode: field("interactiveFastMode", "on", true),
     individualModelAuth: field("individualModelAuth", "on", true),
     webuiModels: field("webuiModels", "ids"),
-    peopleDirectoryUrls: field("peopleDirectoryUrls", "url"),
     ackEmoji: field("ackEmoji", "names"),
     branding: field("branding", "branding"),
     browseMaxSteps: field("browseMaxSteps", "steps"),
@@ -841,8 +836,6 @@ export function createMemoryConfigStore(
       );
     },
     getSlackEmojiCatalogDurable: async (id) => (await slackEmojiCatalogStore.get(id)) ?? null,
-    getPeopleDirectoryUrl: (id) => settings.peopleDirectoryUrls.get(id) ?? null,
-    setPeopleDirectoryUrl: (id, url) => settings.peopleDirectoryUrls.set(id, url),
     getBranding: (id) => settings.branding.get(id) ?? null,
     setBranding: (id, value) => settings.branding.set(id, value),
     getBrandingDurable: async (id) => (await settings.branding.durable(id)) ?? null,

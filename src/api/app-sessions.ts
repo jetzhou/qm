@@ -1199,11 +1199,7 @@ export function createSessionMethods(
         orgScopeId,
         orgSoul,
         orgSoulVersion: deps.config.soulVersion(orgScopeId),
-        effectiveSoul: composeSoul(
-          orgSoul,
-          scopeIdValue === orgScopeId ? null : soul,
-          deps.config.getPeopleDirectoryUrl(orgScopeId),
-        ),
+        effectiveSoul: composeSoul(orgSoul, scopeIdValue === orgScopeId ? null : soul),
       };
     },
 

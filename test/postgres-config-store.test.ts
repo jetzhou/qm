@@ -31,7 +31,6 @@ const TABLES = [
   "slack_quiet_status_flag",
   "base_model_configs",
   "browse_provider_configs",
-  "people_directory_urls",
   "browse_max_steps_configs",
   "browse_model_configs",
   "deployment_identity",
@@ -275,7 +274,6 @@ test(
     await a.setApprovalGrantModes(ch, { session: false, always: true });
     await a.setEgress(ch, { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] });
     await a.setBaseModel(ch, "claude-opus-4-8");
-    await a.setPeopleDirectoryUrl(ch, "https://www.example.com/people");
     await a.setBrowseMaxSteps(ch, 120);
     await a.setBrowseModel(ch, "claude-sonnet-4-6");
     await settle(
@@ -287,7 +285,6 @@ test(
         (await m.approvalGrantModes.get(ch))?.modes.session === false &&
         (await m.egressPolicies.get(ch))?.policy.allowedHosts[0] === "api.example.com" &&
         (await m.baseModels.get(ch))?.modelId === "claude-opus-4-8" &&
-        (await m.peopleDirectoryUrls.get(ch))?.url === "https://www.example.com/people" &&
         (await m.browseMaxSteps.get(ch))?.steps === 120 &&
         (await m.browseModels.get(ch))?.modelId === "claude-sonnet-4-6",
     );
@@ -308,7 +305,6 @@ test(
       "the egress policy survived",
     );
     assert.equal(b.getBaseModel(ch), "claude-opus-4-8", "the base model survived");
-    assert.equal(b.getPeopleDirectoryUrl(ch), "https://www.example.com/people", "the people-directory url survived");
     assert.equal(b.getBrowseMaxSteps(ch), 120, "the browse step limit survived");
     assert.equal(b.getBrowseModel(ch), "claude-sonnet-4-6", "the browse model survived");
   },
@@ -330,8 +326,6 @@ test(
     }
     await a.setBaseModel(ch, "claude-opus-4-8");
     await a.setBaseModel(ch, null);
-    await a.setPeopleDirectoryUrl(ch, "https://example.com/people");
-    await a.setPeopleDirectoryUrl(ch, null);
     await a.setBrowseMaxSteps(ch, 60);
     await a.setBrowseMaxSteps(ch, null);
     await a.setBrowseModel(ch, "claude-sonnet-4-6");
@@ -341,7 +335,6 @@ test(
         (await m.souls.get(ch))?.content === "soul v8" &&
         (await m.egressPolicies.get(ch))?.policy.allowedHosts[0] === "host8.example" &&
         !(await m.baseModels.get(ch)) &&
-        !(await m.peopleDirectoryUrls.get(ch)) &&
         !(await m.browseMaxSteps.get(ch)) &&
         !(await m.browseModels.get(ch)),
     );
@@ -356,7 +349,6 @@ test(
       "the durable egress ends on the last write",
     );
     assert.equal(b.getBaseModel(ch), null, "a cleared base model stays cleared after restart");
-    assert.equal(b.getPeopleDirectoryUrl(ch), null, "a cleared people-directory url stays cleared after restart");
     assert.equal(b.getBrowseMaxSteps(ch), null, "a cleared browse step limit stays cleared after restart");
     assert.equal(b.getBrowseModel(ch), null, "a cleared browse model stays cleared after restart");
   },
@@ -372,7 +364,6 @@ test("pg config store: settings written on one core reach another core through r
   await b.hydrate?.();
 
   await a.setWebuiModels(ch, ["claude-opus-4-8"]);
-  await a.setPeopleDirectoryUrl(ch, "https://www.example.com/people");
   await a.setAckEmoji(ch, ["eyes"]);
   await a.setBrowseMaxSteps(ch, 77);
   await a.setBrowseModel(ch, "claude-sonnet-4-6");
@@ -386,7 +377,6 @@ test("pg config store: settings written on one core reach another core through r
   await b.refreshScope(org);
 
   assert.deepEqual(b.getWebuiModels(ch), ["claude-opus-4-8"]);
-  assert.equal(b.getPeopleDirectoryUrl(ch), "https://www.example.com/people");
   assert.deepEqual(b.getAckEmoji(ch), ["eyes"]);
   assert.equal(b.getBrowseMaxSteps(ch), 77);
   assert.equal(b.getBrowseModel(ch), "claude-sonnet-4-6");
@@ -398,7 +388,6 @@ test("pg config store: settings written on one core reach another core through r
   assert.equal(b.getAutoFlaggerConfig()?.rubric, "flag it");
 
   await a.setWebuiModels(ch, null);
-  await a.setPeopleDirectoryUrl(ch, null);
   await a.setAckEmoji(ch, null);
   await a.setBrowseMaxSteps(ch, null);
   await a.setBrowseModel(ch, null);
@@ -407,7 +396,6 @@ test("pg config store: settings written on one core reach another core through r
   await b.refreshScope(org);
 
   assert.equal(b.getWebuiModels(ch), null);
-  assert.equal(b.getPeopleDirectoryUrl(ch), null);
   assert.equal(b.getAckEmoji(ch), null);
   assert.equal(b.getBrowseMaxSteps(ch), null);
   assert.equal(b.getBrowseModel(ch), null);
