@@ -279,8 +279,8 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   deploymentIdentity: "deployment_identity",
 };
 
-export const configStoreMaps = (map: (table: string) => DurableMap<never>): ConfigStoreMaps =>
-  Object.fromEntries(Object.entries(CONFIG_STORE_TABLES).map(([key, table]) => [key, map(table)]));
+export const configStoreMaps = (map: (table: string) => DurableMap<never>): Required<ConfigStoreMaps> =>
+  Object.fromEntries(Object.entries(CONFIG_STORE_TABLES).map(([key, table]) => [key, map(table)])) as Required<ConfigStoreMaps>;
 
 export function createMemoryConfigStore(
   orgId: string,

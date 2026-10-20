@@ -1,20 +1,6 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import {
-  createMemoryConfigStore,
-  type PersistedSoul,
-  type PersistedSoulRevision,
-  type PersistedCommandPolicy,
-  type PersistedSecurityPosture,
-  type PersistedSharingPosture,
-  type PersistedApprovalGrantModes,
-  type PersistedEgressPolicy,
-  type PersistedBaseModel,
-  type PersistedPeopleDirectoryUrl,
-  type PersistedBrowseMaxSteps,
-  type PersistedBrowseModel,
-  type PersistedDeploymentIdentity,
-} from "../src/resolution/config-store.ts";
+import { configStoreMaps, createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { settle } from "./support/settle.ts";
 import {
   createMemoryMap,
@@ -55,20 +41,7 @@ before(async () => {
   await p.end();
 });
 
-const maps = (f: PostgresArtifactMaps) => ({
-  souls: f.map<PersistedSoul>("soul_configs"),
-  soulHistory: f.map<PersistedSoulRevision>("soul_history"),
-  commandPolicies: f.map<PersistedCommandPolicy>("command_policies"),
-  securityPostures: f.map<PersistedSecurityPosture>("security_postures"),
-  sharingPostures: f.map<PersistedSharingPosture>("sharing_postures"),
-  approvalGrantModes: f.map<PersistedApprovalGrantModes>("approval_grant_modes"),
-  egressPolicies: f.map<PersistedEgressPolicy>("egress_policies"),
-  baseModels: f.map<PersistedBaseModel>("base_model_configs"),
-  peopleDirectoryUrls: f.map<PersistedPeopleDirectoryUrl>("people_directory_urls"),
-  browseMaxSteps: f.map<PersistedBrowseMaxSteps>("browse_max_steps_configs"),
-  browseModels: f.map<PersistedBrowseModel>("browse_model_configs"),
-  deploymentIdentity: f.map<PersistedDeploymentIdentity>("deployment_identity"),
-});
+const maps = (f: PostgresArtifactMaps) => configStoreMaps(f.map);
 
 test("SOUL compare-and-set permits only one writer and keeps current plus history in one durable row", async () => {
   const souls = createMemoryMap<PersistedSoul>();
@@ -383,3 +356,55 @@ test(
     assert.equal(b.getBrowseModel(ch), null, "a cleared browse model stays cleared after restart");
   },
 );
+
+test("pg config store: settings written on one core reach another core through refreshScope", { skip }, async () => {
+  const f = createPostgresMapFactory(URL!);
+  const ch = scopeId("channel", "C4");
+  const org = scopeId("org", "default-org");
+  const a = createMemoryConfigStore("default-org", maps(f));
+  const b = createMemoryConfigStore("default-org", maps(f));
+  await a.hydrate?.();
+  await b.hydrate?.();
+
+  await a.setWebuiModels(ch, ["claude-opus-4-8"]);
+  await a.setPeopleDirectoryUrl(ch, "https://www.example.com/people");
+  await a.setAckEmoji(ch, ["eyes"]);
+  await a.setBrowseMaxSteps(ch, 77);
+  await a.setBrowseModel(ch, "claude-sonnet-4-6");
+  await a.setBranding(ch, { accent: "#123456" });
+  await a.setChannelHeaderPin(ch, true);
+  await a.setApprovalGrantModes(ch, { session: false, always: true });
+  await a.setOrgAmbient(false);
+  await a.setApprovedHarnesses(["pi"]);
+  await a.setAutoFlaggerConfig({ harnessId: "pi", modelId: "claude-opus-4-8", rubric: "flag it" });
+  await b.refreshScope(ch);
+  await b.refreshScope(org);
+
+  assert.deepEqual(b.getWebuiModels(ch), ["claude-opus-4-8"]);
+  assert.equal(b.getPeopleDirectoryUrl(ch), "https://www.example.com/people");
+  assert.deepEqual(b.getAckEmoji(ch), ["eyes"]);
+  assert.equal(b.getBrowseMaxSteps(ch), 77);
+  assert.equal(b.getBrowseModel(ch), "claude-sonnet-4-6");
+  assert.deepEqual(b.getBranding(ch), { accent: "#123456" });
+  assert.equal(b.getChannelHeaderPin(ch), true);
+  assert.deepEqual(b.getApprovalGrantModes(ch), { session: false, always: true });
+  assert.equal(b.getOrgAmbient(), false);
+  assert.deepEqual(b.getApprovedHarnesses(), ["pi"]);
+  assert.equal(b.getAutoFlaggerConfig()?.rubric, "flag it");
+
+  await a.setWebuiModels(ch, null);
+  await a.setPeopleDirectoryUrl(ch, null);
+  await a.setAckEmoji(ch, null);
+  await a.setBrowseMaxSteps(ch, null);
+  await a.setBrowseModel(ch, null);
+  await a.setApprovedHarnesses(null);
+  await b.refreshScope(ch);
+  await b.refreshScope(org);
+
+  assert.equal(b.getWebuiModels(ch), null);
+  assert.equal(b.getPeopleDirectoryUrl(ch), null);
+  assert.equal(b.getAckEmoji(ch), null);
+  assert.equal(b.getBrowseMaxSteps(ch), null);
+  assert.equal(b.getBrowseModel(ch), null);
+  assert.equal(b.getApprovedHarnesses(), null);
+});
