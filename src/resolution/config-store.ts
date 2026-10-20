@@ -303,16 +303,20 @@ export function createMemoryConfigStore(
       await write();
       apply();
     });
-  const setting = <R extends { scopeId: ScopeId }, T>(
-    name: string,
-    durable: DurableMap<R> | undefined,
-    read: (row: R) => T,
-    toRow: (id: ScopeId, value: T) => R,
+  type SettingKey = Exclude<keyof ConfigStoreMaps, "connectorClients">;
+  type Row<M extends SettingKey> = NonNullable<ConfigStoreMaps[M]> extends DurableMap<infer R> ? R : never;
+  const setting = <M extends SettingKey, T>(
+    name: M,
+    read: (row: Row<M>) => T,
+    toRow: (id: ScopeId, value: T) => Row<M>,
+    orgOnly = false,
   ) => {
-    const store = durable ?? createMemoryMap<R>();
+    const store = (opts[name] ?? createMemoryMap()) as DurableMap<Row<M>>;
     const cache = new Map<ScopeId, T>();
-    const load = (id: ScopeId, row: R | null) => (row ? cache.set(id, read(row)) : cache.delete(id));
-    const refresh = async (id: ScopeId) => void load(id, await store.get(id));
+    const load = (id: ScopeId, row: Row<M> | null) => (row ? cache.set(id, read(row)) : cache.delete(id));
+    const refresh = async (id: ScopeId) => {
+      if (!orgOnly || id === org) load(id, await store.get(id));
+    };
     return {
       store,
       refresh,
@@ -331,51 +335,47 @@ export function createMemoryConfigStore(
         );
       },
       async hydrate() {
-        for (const row of await store.all()) load(row.scopeId, row);
+        if (orgOnly) await refresh(org);
+        else for (const row of await store.all()) load((row as { scopeId: ScopeId }).scopeId, row);
       },
     };
   };
-  const field = <K extends string, V>(name: string, durable: DurableMap<ScopedRow<K, V>> | undefined, key: K) =>
+  const field = <M extends SettingKey, K extends Exclude<keyof Row<M>, "scopeId">>(name: M, key: K, orgOnly = false) =>
     setting(
       name,
-      durable,
       (row) => row[key],
-      (id, value: V) => ({ scopeId: id, [key]: value }) as ScopedRow<K, V>,
+      (id, value: Row<M>[K]) => ({ scopeId: id, [key]: value }) as Row<M>,
+      orgOnly,
     );
   const settings = {
-    commandPolicy: field("policy", opts.commandPolicies, "policy"),
-    securityPosture: field("securityPosture", opts.securityPostures, "posture"),
-    sharingPosture: field("sharingPosture", opts.sharingPostures, "posture"),
-    approvalGrantModes: field("approvalGrantModes", opts.approvalGrantModes, "modes"),
-    egress: field("egress", opts.egressPolicies, "policy"),
-    unfulfilledInsights: field("unfulfilled", opts.unfulfilledInsights, "on"),
-    externalSlackParticipants: field("externalSlack", opts.externalSlackParticipants, "on"),
-    channelHeaderPin: field("channelHeaderPin", opts.channelHeaderPin, "on"),
-    approvedHarnesses: field("approvedHarnesses", opts.approvedHarnesses, "ids"),
-    internalMemberOverrides: field("internalMemberOverrides", opts.internalMemberOverrides, "members"),
-    orgAmbient: field("orgAmbient", opts.orgAmbient, "on"),
-    interactiveFastMode: field("interactiveFastMode", opts.interactiveFastMode, "on"),
-    individualModelAuth: setting(
-      "individualModelAuth",
-      opts.individualModelAuth,
-      (row) => row.on,
-      (id, on: boolean): PersistedModelAccount => ({ scopeId: id, on }),
-    ),
-    webuiModels: field("webuiModels", opts.webuiModels, "ids"),
-    peopleDirectoryUrls: field("peopleDir", opts.peopleDirectoryUrls, "url"),
-    ackEmoji: field("ackEmoji", opts.ackEmoji, "names"),
-    pinnedSkills: field("pinnedSkills", opts.pinnedSkills, "names"),
-    branding: field("branding", opts.branding, "branding"),
-    browseMaxSteps: field("browseSteps", opts.browseMaxSteps, "steps"),
-    browseModels: field("browseModel", opts.browseModels, "modelId"),
-    autoFlagger: setting(
-      "autoFlagger",
-      opts.autoFlaggerConfigs,
+    commandPolicies: field("commandPolicies", "policy"),
+    securityPostures: field("securityPostures", "posture"),
+    sharingPostures: field("sharingPostures", "posture"),
+    approvalGrantModes: field("approvalGrantModes", "modes"),
+    egressPolicies: field("egressPolicies", "policy"),
+    unfulfilledInsights: field("unfulfilledInsights", "on"),
+    externalSlackParticipants: field("externalSlackParticipants", "on"),
+    channelHeaderPin: field("channelHeaderPin", "on"),
+    approvedHarnesses: field("approvedHarnesses", "ids", true),
+    internalMemberOverrides: field("internalMemberOverrides", "members", true),
+    orgAmbient: field("orgAmbient", "on", true),
+    interactiveFastMode: field("interactiveFastMode", "on", true),
+    individualModelAuth: field("individualModelAuth", "on", true),
+    webuiModels: field("webuiModels", "ids"),
+    peopleDirectoryUrls: field("peopleDirectoryUrls", "url"),
+    ackEmoji: field("ackEmoji", "names"),
+    branding: field("branding", "branding"),
+    browseMaxSteps: field("browseMaxSteps", "steps"),
+    browseModels: field("browseModels", "modelId"),
+    autoFlaggerConfigs: setting(
+      "autoFlaggerConfigs",
       ({ harnessId, modelId, rubric }): AutoFlaggerConfig => ({ harnessId, modelId, rubric }),
       (id, config) => ({ scopeId: id, ...config }),
+      true,
     ),
-  };
+  } satisfies Partial<Record<SettingKey, unknown>>;
   const allSettings = Object.values(settings);
+  const pinnedSkillsStore = opts.pinnedSkills ?? createMemoryMap<ScopedRow<"names", string[]>>();
   const channelHeaderPinListeners = new Set<(id: ScopeId) => void>();
   const noteChannelHeaderPinChanged = (id: ScopeId): void => {
     for (const listener of channelHeaderPinListeners) {
@@ -522,9 +522,9 @@ export function createMemoryConfigStore(
             if (soul) souls.set(id, { content: soul.content, version: soul.version });
             else if (id !== org) souls.delete(id);
           }),
-          settings.commandPolicy.reload(id),
-          settings.egress.reload(id),
-          settings.sharingPosture.reload(id),
+          settings.commandPolicies.reload(id),
+          settings.egressPolicies.reload(id),
+          settings.sharingPostures.reload(id),
         ]),
       );
     },
@@ -658,44 +658,44 @@ export function createMemoryConfigStore(
     restoreSoulCacheSnapshot(id, snapshot) {
       loadSoulCache(id, cloneSoul(snapshot));
     },
-    getCommandPolicy: (id) => settings.commandPolicy.get(id) ?? (id === org ? orgDefaultPolicy : null),
-    setCommandPolicy: (id, policy) => settings.commandPolicy.set(id, policy),
+    getCommandPolicy: (id) => settings.commandPolicies.get(id) ?? (id === org ? orgDefaultPolicy : null),
+    setCommandPolicy: (id, policy) => settings.commandPolicies.set(id, policy),
     getSecurityPosture(id) {
-      const orgPosture = settings.securityPosture.get(org) ?? defaultSecurityPosture;
-      return id === org ? orgPosture : composeSecurityPosture(orgPosture, settings.securityPosture.get(id));
+      const orgPosture = settings.securityPostures.get(org) ?? defaultSecurityPosture;
+      return id === org ? orgPosture : composeSecurityPosture(orgPosture, settings.securityPostures.get(id));
     },
     async getSecurityPostureDurable(id) {
-      const orgPosture = (await settings.securityPosture.durable(org)) ?? defaultSecurityPosture;
+      const orgPosture = (await settings.securityPostures.durable(org)) ?? defaultSecurityPosture;
       if (id === org) return orgPosture;
-      return composeSecurityPosture(orgPosture, await settings.securityPosture.durable(id));
+      return composeSecurityPosture(orgPosture, await settings.securityPostures.durable(id));
     },
     async setSecurityPosture(id, posture) {
       const effective =
         id === org
           ? posture
-          : composeSecurityPosture((await settings.securityPosture.durable(org)) ?? defaultSecurityPosture, posture);
-      await settings.securityPosture.set(id, effective);
+          : composeSecurityPosture((await settings.securityPostures.durable(org)) ?? defaultSecurityPosture, posture);
+      await settings.securityPostures.set(id, effective);
     },
     getSharingPosture(id) {
-      const orgPosture = settings.sharingPosture.get(org) ?? defaultSharingPosture;
-      return id === org ? orgPosture : composeSharingPostures(orgPosture, [settings.sharingPosture.get(id)]);
+      const orgPosture = settings.sharingPostures.get(org) ?? defaultSharingPosture;
+      return id === org ? orgPosture : composeSharingPostures(orgPosture, [settings.sharingPostures.get(id)]);
     },
     async getSharingPostureDurable(id) {
-      const orgPosture = (await settings.sharingPosture.durable(org)) ?? defaultSharingPosture;
-      return id === org ? orgPosture : composeSharingPostures(orgPosture, [await settings.sharingPosture.durable(id)]);
+      const orgPosture = (await settings.sharingPostures.durable(org)) ?? defaultSharingPosture;
+      return id === org ? orgPosture : composeSharingPostures(orgPosture, [await settings.sharingPostures.durable(id)]);
     },
-    getSharingPostureOwnDurable: async (id) => (await settings.sharingPosture.durable(id)) ?? null,
+    getSharingPostureOwnDurable: async (id) => (await settings.sharingPostures.durable(id)) ?? null,
     async resolveSharingPostureDurable(personalId, targetId) {
       const [orgPosture, personalPosture, targetPosture] = await Promise.all(
-        [org, personalId, targetId].map((id) => settings.sharingPosture.durable(id)),
+        [org, personalId, targetId].map((id) => settings.sharingPostures.durable(id)),
       );
       return composeSharingPostures(orgPosture ?? defaultSharingPosture, [
         personalId === org ? undefined : personalPosture,
         targetId === org || targetId === personalId ? undefined : targetPosture,
       ]);
     },
-    setSharingPosture: (id, posture) => settings.sharingPosture.set(id, posture),
-    clearSharingPosture: (id) => settings.sharingPosture.set(id, null),
+    setSharingPosture: (id, posture) => settings.sharingPostures.set(id, posture),
+    clearSharingPosture: (id) => settings.sharingPostures.set(id, null),
     getApprovalGrantModes(id) {
       const orgModes = settings.approvalGrantModes.get(org) ?? DEFAULT_APPROVAL_GRANT_MODES;
       if (id === org) return { ...orgModes };
@@ -708,8 +708,8 @@ export function createMemoryConfigStore(
     },
     setApprovalGrantModes: (id, modes) =>
       settings.approvalGrantModes.set(id, { session: !!modes.session, always: !!modes.always }),
-    getEgress: (id) => settings.egress.get(id) ?? (id === org ? orgDefaultEgress : null),
-    setEgress: (id, policy) => settings.egress.set(id, policy),
+    getEgress: (id) => settings.egressPolicies.get(id) ?? (id === org ? orgDefaultEgress : null),
+    setEgress: (id, policy) => settings.egressPolicies.set(id, policy),
     getUnfulfilledInsights: (id) =>
       (settings.unfulfilledInsights.get(org) ?? false) || (settings.unfulfilledInsights.get(id) ?? false),
     setUnfulfilledInsights: (id, on) => settings.unfulfilledInsights.set(id, on),
@@ -830,8 +830,11 @@ export function createMemoryConfigStore(
     getAckEmoji: (id) => settings.ackEmoji.get(id) ?? null,
     setAckEmoji: (id, names) => settings.ackEmoji.set(id, names?.length ? names : null),
     getAckEmojiDurable: async (id) => (await settings.ackEmoji.durable(id)) ?? null,
-    getPinnedSkillsDurable: async (id) => (await settings.pinnedSkills.durable(id)) ?? [],
-    setPinnedSkills: (id, names) => settings.pinnedSkills.set(id, names.length ? names : null),
+    getPinnedSkillsDurable: async (id) => (await pinnedSkillsStore.get(id))?.names ?? [],
+    setPinnedSkills: (id, names) =>
+      writeQueue(`pinnedSkills:${id}`, () =>
+        names.length ? pinnedSkillsStore.put(id, { scopeId: id, names }) : pinnedSkillsStore.delete(id),
+      ),
     async setSlackEmojiCatalog(id, emoji) {
       await writeQueue(`slackEmojiCatalog:${id}`, () =>
         slackEmojiCatalogStore.put(id, { scopeId: id, emoji, updatedAt: Date.now() }),
@@ -859,8 +862,8 @@ export function createMemoryConfigStore(
         cacheBaseModel(org, saved);
       });
     },
-    getAutoFlaggerConfig: () => settings.autoFlagger.get(org) ?? null,
-    setAutoFlaggerConfig: (config) => settings.autoFlagger.set(org, config),
+    getAutoFlaggerConfig: () => settings.autoFlaggerConfigs.get(org) ?? null,
+    setAutoFlaggerConfig: (config) => settings.autoFlaggerConfigs.set(org, config),
     async setConnectorClient(id, provider, input) {
       const rec: StoredConnectorClient = {
         scopeId: id,
@@ -896,11 +899,11 @@ export function createMemoryConfigStore(
     async scopeConfigPresence(id) {
       const stores = {
         soul: soulStore,
-        commandPolicy: settings.commandPolicy.store,
-        securityPosture: settings.securityPosture.store,
-        sharingPosture: settings.sharingPosture.store,
+        commandPolicy: settings.commandPolicies.store,
+        securityPosture: settings.securityPostures.store,
+        sharingPosture: settings.sharingPostures.store,
         approvalGrantModes: settings.approvalGrantModes.store,
-        egress: settings.egress.store,
+        egress: settings.egressPolicies.store,
         unfulfilledInsights: settings.unfulfilledInsights.store,
         externalSlackParticipants: settings.externalSlackParticipants.store,
         runtime: baseModelStore,
