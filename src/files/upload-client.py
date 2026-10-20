@@ -24,6 +24,13 @@ def quote(value):
     return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def error_code(content):
+    try:
+        return json.loads(content).get("error")
+    except (ValueError, AttributeError):
+        return None
+
+
 def request(method, url, data=None, headers=None):
     config = [f"url = {quote(url)}", f"request = {quote(method)}", "silent", "show-error", "max-time = 180", 'write-out = "\\n%{http_code}"']
     config += [f"header = {quote(f'{name}: {value}')}" for name, value in (headers or {}).items()]
@@ -44,7 +51,7 @@ def request(method, url, data=None, headers=None):
             status = int(status or b"0")
             if 200 <= status < 300:
                 return content
-            if status < 500 and status != 429:
+            if status < 500 and (status != 429 or error_code(content) == "upload_quota"):
                 raise RequestError(status, f"request failed ({status}): {content[:4096].decode(errors='replace')}")
             failure = f"HTTP {status}: {content[:200].decode(errors='replace')}"
         else:
@@ -110,14 +117,21 @@ def main():
             except (RequestError, RuntimeError) as error:
                 print(f"could not cancel the previous unfinished upload: {error}", file=sys.stderr)
         state = None
+    status = None
+    if state:
+        try:
+            status = api("GET", f"/v1/files/uploads/{state['id']}")["upload"]
+        except RequestError as error:
+            if error.status != 404:
+                raise
+        expired = status and status["state"] == "pending" and status["expiresAt"] <= time.time() * 1000
+        if status and "file" not in state and (expired or status["state"] in ("aborted", "failed")):
+            print(f"starting a new upload: saved upload {state['id']} is {'expired' if expired else status['state']}", file=sys.stderr)
+            state = status = None
     if not state:
         state = {"id": uuid.uuid4().hex, "manifest": manifest, "destination": destination, "next": 1}
         save(state_path, state)
-    try:
-        status = api("GET", f"/v1/files/uploads/{state['id']}")["upload"]
-    except RequestError as error:
-        if error.status != 404:
-            raise
+    if status is None:
         status = api("POST", "/v1/files/uploads", {**manifest, "requestId": state["id"]})["upload"]
     if status["state"] == "pending":
         with args.file.open("rb") as source:

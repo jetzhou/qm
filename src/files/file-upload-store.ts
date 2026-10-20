@@ -22,6 +22,7 @@ export interface FileUploadStore {
   insert(upload: FileUpload): Promise<void>;
   get(id: string): Promise<FileUpload | null>;
   transition(id: string, from: FileUploadState[], to: FileUploadState): Promise<boolean>;
+  extend(id: string, expiresAt: number): Promise<boolean>;
   expired(now: number): Promise<FileUpload[]>;
 }
 
@@ -73,14 +74,18 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
       await withPgTransaction(await db.pool(), async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`file-uploads:${upload.actorId}`]);
         const result = await client.query(
-          "SELECT count(*) AS count, coalesce(sum(size_bytes),0) AS bytes FROM file_uploads WHERE actor_id=$1 AND state NOT IN ('complete','aborted','failed')",
-          [upload.actorId],
+          "SELECT count(*) AS count, coalesce(sum(size_bytes),0) AS bytes FROM file_uploads WHERE actor_id=$1 AND state NOT IN ('complete','aborted','failed') AND NOT (state='pending' AND expires_at <= $2)",
+          [upload.actorId, upload.createdAt],
         );
         if (
           Number(result.rows[0].count) >= MAX_ACTIVE_UPLOADS ||
           Number(result.rows[0].bytes) + upload.sizeBytes > MAX_ACTIVE_UPLOAD_BYTES
         )
-          throw new FileUploadError("active upload quota exceeded", 429, "upload_quota");
+          throw new FileUploadError(
+            "active upload quota exceeded; finish or DELETE /v1/files/uploads/:id an unfinished upload, or wait an hour for idle ones to expire",
+            429,
+            "upload_quota",
+          );
         await client.query(
           "INSERT INTO file_uploads(id,actor_id,state,size_bytes,expires_at,data) VALUES($1,$2,$3,$4,$5,$6)",
           [upload.id, upload.actorId, upload.state, upload.sizeBytes, upload.expiresAt, JSON.stringify(upload)],
@@ -95,6 +100,16 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
       return (
         (await db.query("UPDATE file_uploads SET state=$3 WHERE id=$1 AND state=ANY($2::text[])", [id, from, to]))
           .rowCount === 1
+      );
+    },
+    async extend(id, expiresAt) {
+      return (
+        (
+          await db.query(
+            "UPDATE file_uploads SET expires_at=$2, data=jsonb_set(data,'{expiresAt}',to_jsonb($2::bigint)) WHERE id=$1 AND state='pending'",
+            [id, expiresAt],
+          )
+        ).rowCount === 1
       );
     },
     async expired(now) {

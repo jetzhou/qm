@@ -25,6 +25,7 @@ import { createSweeper } from "../util/sweeper.ts";
 export const FILE_UPLOAD_PART_SIZE = 64 * 1024 * 1024;
 const MAX_DIRECT_FILE_BYTES = 100 * 1024 ** 3;
 const UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
+const UPLOAD_IDLE_MS = 60 * 60 * 1000;
 const URL_TTL_SECONDS = 15 * 60;
 const SHA256_BASE64 = /^[A-Za-z0-9+/]{43}=$/;
 
@@ -157,7 +158,7 @@ export function createDirectFileUploads(options: {
         uploadId: "",
         state: "pending",
         createdAt: now(),
-        expiresAt: now() + UPLOAD_TTL_MS,
+        expiresAt: now() + UPLOAD_IDLE_MS,
       };
       const matches = (existing: FileUpload) =>
         existing.actorId === row.actorId &&
@@ -201,7 +202,9 @@ export function createDirectFileUploads(options: {
       if (!Number.isSafeInteger(partNumber) || partNumber < 1 || partNumber > row.checksums.length)
         throw new FileUploadError("invalid part number");
       const length = Math.min(row.partSize, row.sizeBytes - (partNumber - 1) * row.partSize);
-      const expiresIn = Math.min(URL_TTL_SECONDS, Math.floor((row.expiresAt - now()) / 1000));
+      const expiresAt = Math.min(row.createdAt + UPLOAD_TTL_MS, now() + UPLOAD_IDLE_MS);
+      if (!(await store.extend(id, expiresAt))) throw new FileUploadError("upload is not pending or has expired", 409);
+      const expiresIn = Math.min(URL_TTL_SECONDS, Math.floor((expiresAt - now()) / 1000));
       if (expiresIn < 1) throw new FileUploadError("upload expired", 409);
       const checksum = row.checksums[partNumber - 1]!;
       const url = await presign(

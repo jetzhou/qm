@@ -25,6 +25,12 @@ function fixture() {
       row.state = to;
       return true;
     },
+    async extend(id, expiresAt) {
+      const row = rows.get(id);
+      if (!row || row.state !== "pending") return false;
+      row.expiresAt = expiresAt;
+      return true;
+    },
     async expired(now) {
       return [...rows.values()].filter(
         (r) => r.expiresAt <= now && r.state !== "complete" && r.state !== "aborted" && r.state !== "failed",
@@ -110,11 +116,29 @@ function fixture() {
     loseResponse: () => {
       loseCompleteResponse = true;
     },
-    advance: () => {
-      time += 25 * 60 * 60 * 1000;
+    advance: (ms = 25 * 60 * 60 * 1000) => {
+      time += ms;
     },
   };
 }
+
+test("an idle pending upload expires after an hour; signing parts keeps it alive up to a day", async () => {
+  const hour = 60 * 60 * 1000;
+  const f = fixture();
+  const idle = await f.service.begin(f.input);
+  f.advance(hour);
+  await assert.rejects(f.service.sign(idle.id, 1), /expired/);
+  await f.service.sweep();
+  assert.equal((await f.store.get(idle.id))!.state, "aborted");
+
+  const busy = await f.service.begin(f.input);
+  for (let i = 0; i < 24; i++) {
+    await f.service.sign(busy.id, 1);
+    f.advance(hour - 1);
+  }
+  await assert.rejects(f.service.sign(busy.id, 1), /expired/);
+  assert.equal((await f.store.get(busy.id))!.expiresAt, busy.createdAt + 24 * hour);
+});
 
 test("signed parts bind the exact size, checksum, upload and number; unpublished parts are invisible", async () => {
   const f = fixture();
