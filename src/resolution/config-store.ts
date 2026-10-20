@@ -433,6 +433,17 @@ export function createMemoryConfigStore(
       return null;
     }
   };
+  const runtimeSelection = (row: PersistedBaseModel | null | undefined): ScopedRuntimeSelection | null => {
+    if (!row?.harnessId || !row.modelId) return null;
+    return {
+      harnessId: row.harnessId,
+      modelId: row.modelId,
+      orgRevision: row.orgRevision ?? 0,
+      ...(row.revision !== undefined ? { revision: row.revision } : {}),
+      ...(row.effortLevel !== undefined ? { effortLevel: row.effortLevel } : {}),
+      ...(row.fastMode !== undefined ? { fastMode: row.fastMode } : {}),
+    };
+  };
   const cacheBaseModel = (id: ScopeId, row: PersistedBaseModel | null): void => {
     if (row) baseModels.set(id, row);
     else baseModels.delete(id);
@@ -744,18 +755,7 @@ export function createMemoryConfigStore(
       });
       noteRuntimeSelectionChanged(id);
     },
-    getRuntimeSelection(id) {
-      const row = baseModels.get(id);
-      if (!row?.harnessId || !row.modelId) return null;
-      return {
-        harnessId: row.harnessId,
-        modelId: row.modelId,
-        orgRevision: row.orgRevision ?? 0,
-        ...(row.revision !== undefined ? { revision: row.revision } : {}),
-        ...(row.effortLevel !== undefined ? { effortLevel: row.effortLevel } : {}),
-        ...(row.fastMode !== undefined ? { fastMode: row.fastMode } : {}),
-      };
-    },
+    getRuntimeSelection: (id) => runtimeSelection(baseModels.get(id)),
     async setRuntimeSelection(id, selection) {
       await writeQueue(`model:${id}`, async () => {
         if (selection === null) {
@@ -783,18 +783,7 @@ export function createMemoryConfigStore(
     onRuntimeSelectionChanged(listener) {
       runtimeSelectionListeners.add(listener);
     },
-    getRuntimeSelectionDurable: async (id) => {
-      const row = await baseModelStore.get(id);
-      if (!row?.harnessId || !row.modelId) return null;
-      return {
-        harnessId: row.harnessId,
-        modelId: row.modelId,
-        orgRevision: row.orgRevision ?? 0,
-        ...(row.revision !== undefined ? { revision: row.revision } : {}),
-        ...(row.effortLevel !== undefined ? { effortLevel: row.effortLevel } : {}),
-        ...(row.fastMode !== undefined ? { fastMode: row.fastMode } : {}),
-      };
-    },
+    getRuntimeSelectionDurable: async (id) => runtimeSelection(await baseModelStore.get(id)),
     getApprovedHarnesses: () => {
       const ids = settings.approvedHarnesses.get(org);
       return ids ? [...ids] : null;
@@ -905,44 +894,23 @@ export function createMemoryConfigStore(
       };
     },
     async scopeConfigPresence(id) {
-      const [
-        soul,
-        commandPolicy,
-        securityPosture,
-        sharingPosture,
-        grantModes,
-        egressPolicy,
-        unfulfilled,
-        externalSlack,
-        runtime,
-        approved,
-        brandingRow,
-      ] = await Promise.all([
-        soulStore.get(id),
-        settings.commandPolicy.store.get(id),
-        settings.securityPosture.store.get(id),
-        settings.sharingPosture.store.get(id),
-        settings.approvalGrantModes.store.get(id),
-        settings.egress.store.get(id),
-        settings.unfulfilledInsights.store.get(id),
-        settings.externalSlackParticipants.store.get(id),
-        baseModelStore.get(id),
-        id === org ? settings.approvedHarnesses.store.get(org) : null,
-        settings.branding.store.get(id),
-      ]);
-      return {
-        soul: !!soul,
-        commandPolicy: !!commandPolicy,
-        securityPosture: !!securityPosture,
-        sharingPosture: !!sharingPosture,
-        approvalGrantModes: !!grantModes,
-        egress: !!egressPolicy,
-        unfulfilledInsights: !!unfulfilled,
-        externalSlackParticipants: !!externalSlack,
-        runtime: !!runtime,
-        approvedHarnesses: !!approved,
-        branding: !!brandingRow,
+      const stores = {
+        soul: soulStore,
+        commandPolicy: settings.commandPolicy.store,
+        securityPosture: settings.securityPosture.store,
+        sharingPosture: settings.sharingPosture.store,
+        approvalGrantModes: settings.approvalGrantModes.store,
+        egress: settings.egress.store,
+        unfulfilledInsights: settings.unfulfilledInsights.store,
+        externalSlackParticipants: settings.externalSlackParticipants.store,
+        runtime: baseModelStore,
+        approvedHarnesses: settings.approvedHarnesses.store,
+        branding: settings.branding.store,
       };
+      const present = await Promise.all(
+        Object.entries(stores).map(async ([key, store]) => [key, !!(await store.get(id))] as const),
+      );
+      return Object.fromEntries(present) as Record<keyof typeof stores, boolean>;
     },
     async refreshScope(id) {
       const [soul, baseModel] = await Promise.all([
