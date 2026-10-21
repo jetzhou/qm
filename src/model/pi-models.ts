@@ -17,7 +17,7 @@ import {
   type ModelOverlay,
 } from "./model-overlay.ts";
 import { providerBaseUrl } from "./provider-endpoints.ts";
-import { isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
+import { type CustomRuntimeModel, isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
 
 const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
 
@@ -631,7 +631,20 @@ function resolveBaseModel(id: string): PiModel | undefined {
   if (overlay && !isEmbeddingModel(overlay)) {
     return modelFromOverlay(overlay, false);
   }
-  return (resolveCustomModel(id) as unknown as PiModel | undefined) ?? OPENROUTER_CATALOG_MODELS.get(id);
+  const custom = resolveCustomModel(id);
+  return custom ? customPiModel(custom) : OPENROUTER_CATALOG_MODELS.get(id);
+}
+
+function customPiModel(custom: CustomRuntimeModel): PiModel {
+  const model = custom as unknown as PiModel;
+  if (model.api !== "anthropic-messages") return model;
+  const known = resolveBuiltinModel(custom.upstreamId);
+  if (known?.api !== "anthropic-messages") return model;
+  return {
+    ...model,
+    ...(known.compat ? { compat: known.compat } : {}),
+    ...(known.thinkingLevelMap ? { thinkingLevelMap: known.thinkingLevelMap } : {}),
+  };
 }
 
 export function modelFromOverlay(spec: ModelOverlay, useOrgEndpoints = true): PiModel | undefined {

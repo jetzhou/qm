@@ -77,9 +77,15 @@ import {
   codexProviderModelId,
   modelHasPrices,
 } from "../model/pi-models.ts";
-import { customModelsJson, customProvidersVersion, resolveCustomModel } from "../model/custom-providers.ts";
+import {
+  customModelsJson,
+  customProvidersVersion,
+  hasCustomModelPrefix,
+  resolveCustomModel,
+} from "../model/custom-providers.ts";
 import {
   GatewayModelUnavailableError,
+  ModelUnavailableError,
   modelGatewayRequest,
   type ModelGatewayTransportConfig,
 } from "../model/provider-endpoints.ts";
@@ -1229,6 +1235,7 @@ export async function buildModelRuntime(
         model.provider === CODEX_SUBSCRIPTION_PROVIDER
           ? codexProviderModelId(model.id)
           : (modelRequestOverrides(model.id)?.model ?? resolveCustomModel(model.id)?.upstreamId ?? model.id);
+      const unregistered = hasCustomModelPrefix(model.id) && !resolveCustomModel(model.id);
       const candidate = withRequestHeaders(model, true, false);
       const passthrough = {
         ...retained(options),
@@ -1240,7 +1247,12 @@ export async function buildModelRuntime(
       return {
         model: candidate,
         options:
-          providerModelId === model.id ? passthrough : wireModelId(passthrough, model, async () => providerModelId),
+          providerModelId === model.id && !unregistered
+            ? passthrough
+            : wireModelId(passthrough, model, async () => {
+                if (unregistered) throw new ModelUnavailableError(model.id);
+                return providerModelId;
+              }),
       };
     }
     const routed = {
