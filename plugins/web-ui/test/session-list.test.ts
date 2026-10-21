@@ -678,3 +678,15 @@ test("a goal lights the background chip with time worked, then the floor", () =>
   assert.equal(row?.label, "goal · 12m worked · 20m floor");
   assert.equal(backgroundLabel(0, 0, 0, 0, 0, { activeMs: 60_000 }, 9_999_999)?.label, "goal · 1m worked");
 });
+
+test("a first page drops cached children of a closed row so its server subagent counts show", () => {
+  const parent = at("p", "web:u:p", 5);
+  const done = at("c1", "agent:c1", 4, { parentSessionId: "p" });
+  const cached = mergeChildren(mergeFirstPage([], { sessions: [parent] }, firstPage, ["p"]), "p", [done]);
+  const served = { ...parent, working: true, subagents: { running: 1, waiting: 0 } };
+  const closed = mergeFirstPage(cached, { sessions: [served] }, firstPage);
+  assert.deepEqual(closed.map((s) => s.id), ["p"]);
+  assert.equal(rowIndicators(closed[0], null, closed).background?.subagents, 1);
+  const open = mergeFirstPage(cached, { sessions: [served] }, firstPage, ["p"]);
+  assert.deepEqual(open.map((s) => s.id).sort(), ["c1", "p"], "an open chat keeps its children until they are refetched");
+});

@@ -179,7 +179,13 @@ export function mergeFirstPage(
 ): CoreSession[] {
   const served = new Set([...page.sessions, ...(page.pinned ?? [])].map((row) => row.id));
   const open = new Set(openIds);
+  // A served row carries the server's own subagent counts. Cached children of a row that is not
+  // open stop refreshing, so drop them to let those counts show instead of a stale copy.
+  const staleChildren = new Set(
+    [...served].filter((id) => !open.has(id)).flatMap((id) => descendantsOf(prev, id).map(({ session }) => session.id)),
+  );
   const kept = prev.filter((row) => {
+    if (staleChildren.has(row.id)) return false;
     if (served.has(row.id) || open.has(row.id) || !inPageClass(row, window)) return true;
     if (row.pinned && !window.archived) return false;
     return window.floor !== null && activityOf(row) < window.floor;
