@@ -685,8 +685,15 @@ test("a first page drops cached children of a closed row so its server subagent 
   const cached = mergeChildren(mergeFirstPage([], { sessions: [parent] }, firstPage, ["p"]), "p", [done]);
   const served = { ...parent, working: true, subagents: { running: 1, waiting: 0 } };
   const closed = mergeFirstPage(cached, { sessions: [served] }, firstPage);
-  assert.deepEqual(closed.map((s) => s.id), ["p"]);
+  assert.deepEqual(
+    closed.map((s) => s.id),
+    ["p"],
+  );
   assert.equal(rowIndicators(closed[0], null, closed).background?.subagents, 1);
   const open = mergeFirstPage(cached, { sessions: [served] }, firstPage, ["p"]);
-  assert.deepEqual(open.map((s) => s.id).sort(), ["c1", "p"], "an open chat keeps its children until they are refetched");
+  assert.deepEqual(
+    open.map((s) => s.id).sort(),
+    ["c1", "p"],
+    "an open chat keeps its children until they are refetched",
+  );
 });
