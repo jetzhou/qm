@@ -697,3 +697,12 @@ test("a first page drops cached children of a closed row so its server subagent 
     "an open chat keeps its children until they are refetched",
   );
 });
+
+test("a first page keeps a closed row's cached tree while one of its subagents is open", () => {
+  const parent = at("p", "web:u:p", 5);
+  const child = at("c1", "agent:c1", 4, { parentSessionId: "p", working: true });
+  const sibling = at("c2", "agent:c2", 3, { parentSessionId: "p" });
+  const cached = mergeChildren(mergeFirstPage([], { sessions: [parent] }, firstPage, ["p"]), "p", [child, sibling]);
+  const next = mergeFirstPage(cached, { sessions: [parent] }, firstPage, ["c1"]);
+  assert.deepEqual(next.map((s) => s.id).sort(), ["c1", "c2", "p"]);
+});
