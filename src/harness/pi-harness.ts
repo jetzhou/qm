@@ -1231,11 +1231,12 @@ export async function buildModelRuntime(
   ): { model: Model<Api>; options: T } => {
     const request = modelGatewayRequest(modelGateway, model);
     if (!request) {
+      const custom = resolveCustomModel(model.id);
       const providerModelId =
         model.provider === CODEX_SUBSCRIPTION_PROVIDER
           ? codexProviderModelId(model.id)
-          : (modelRequestOverrides(model.id)?.model ?? resolveCustomModel(model.id)?.upstreamId ?? model.id);
-      const unregistered = hasCustomModelPrefix(model.id) && !resolveCustomModel(model.id);
+          : (modelRequestOverrides(model.id)?.model ?? custom?.upstreamId ?? model.id);
+      const unregistered = !custom && hasCustomModelPrefix(model.id);
       const candidate = withRequestHeaders(model, true, false);
       const passthrough = {
         ...retained(options),

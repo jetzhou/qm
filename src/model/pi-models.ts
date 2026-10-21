@@ -639,10 +639,10 @@ function customPiModel(custom: CustomRuntimeModel): PiModel {
   const model = custom as unknown as PiModel;
   if (model.api !== "anthropic-messages") return model;
   const known = resolveBuiltinModel(custom.upstreamId);
-  if (known?.api !== "anthropic-messages") return model;
+  if (known?.api !== "anthropic-messages" || !modelSupportsAdaptiveThinking(known)) return model;
   return {
     ...model,
-    ...(known.compat ? { compat: known.compat } : {}),
+    compat: { forceAdaptiveThinking: true },
     ...(known.thinkingLevelMap ? { thinkingLevelMap: known.thinkingLevelMap } : {}),
   };
 }
